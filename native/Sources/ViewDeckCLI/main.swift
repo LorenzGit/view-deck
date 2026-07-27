@@ -1,0 +1,3 @@
+import ViewDeckCore
+
+ViewDeckCommand.main()

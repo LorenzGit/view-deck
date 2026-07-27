@@ -1,0 +1,60 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build output and packaged artifacts
+dist/
+*.log
+*.dmg
+*.zip
+*.app
+
+# Swift Package Manager
+.build/
+native/.build/
+.swiftpm/
+native/.swiftpm/
+Package.resolved
+
+# Xcode user state
+DerivedData/
+*.xcarchive
+*.dSYM/
+*.xcuserstate
+xcuserdata/
+
+# Editors and local environment
+.idea/
+.vscode/
+.codex/
+.agents/
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/viewdeck-qa/
+!.agents/skills/viewdeck-qa/**
+*.swp
+*.swo
+.direnv/
+.envrc
+.npmrc
+.env
+.env.*
+!.env.example
+
+# Local credentials and machine-specific overrides
+*.local
+*.key
+*.p12
+*.pem
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+credentials.json
+service-account*.json
+.aws/
+.config/gh/
+secrets/

@@ -1,0 +1,203 @@
+# ViewDeck
+
+ViewDeck is a native macOS studio for previewing websites and local web projects inside configurable device frames. Its renderer is `WKWebView`, so previews use Apple WebKit directly.
+
+> [!NOTE]
+> ViewDeck reproduces viewport geometry, device pixel ratio, safe areas, and optional browser chrome. It is not an iOS or Android operating-system emulator.
+
+## Features
+
+- Native AppKit interface with Apple WebKit rendering.
+- Built-in iPhone 17 Pro Max and iPhone 16 Pro browser/app profiles, plus iPad, Android-sized, and desktop profiles.
+- Phone and tablet profiles expose touch-style input capabilities to page JavaScript and CSS, including coarse-pointer and no-hover media queries.
+- Custom device skins with editable viewport, shell, sensor, corner-radius, and DPR values.
+- Safe-area visualization, CSS variables, and optional page-padding injection.
+- Optional reusable HTML header and footer layers.
+- WebGL and WebGPU content through `WKWebView` when supported by the host Mac.
+- One-click access to the full WebKit Inspector without opening Safari.
+- Links that request a new tab or window stay in the current preview; non-web URL schemes are handed to macOS.
+- Local preview modes for an npm script, a static HTML file, or a custom command.
+- Automatic localhost URL detection, port-conflict rerouting, in-app process output, and stop controls.
+- Live localhost port inventory with process, command, working-directory, collision, open, and stop controls.
+- Resizable side panels and a compact, responsive workspace.
+- One-click screen-only device screenshots with editable text, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
+- A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
+- Record and replay portable QA scenarios containing timed pointer, mouse, form, and keyboard input, critical-moment screenshots, MP4 video, and the complete device configuration.
+
+## Requirements
+
+- macOS 14 or newer.
+- Xcode Command Line Tools with Swift 6 or newer.
+- Node.js and npm only when previewing npm-based projects or running the npm integration tests.
+
+ViewDeck is currently distributed as source. The build script creates an ad-hoc signed application for local development.
+
+## Build and run
+
+```bash
+git clone https://github.com/LorenzGit/view-deck.git
+cd view-deck
+zsh scripts/build-native-app.sh
+open dist/native/ViewDeck.app
+```
+
+The application is assembled at `dist/native/ViewDeck.app`. For a quicker development run without assembling an application bundle:
+
+```bash
+swift run --package-path native ViewDeckNative
+```
+
+The build also creates `dist/native/viewdeck`, a standalone command-line executable.
+
+## Command-line automation
+
+List the available device profiles:
+
+```bash
+dist/native/viewdeck devices list --json
+```
+
+Start a project's development server, wait for its canvas, take a device screenshot, and write a JSON audit:
+
+```bash
+dist/native/viewdeck capture \
+  --project /path/to/project \
+  --npm-script dev \
+  --device iphone-17-pro-max \
+  --wait-for canvas \
+  --output /tmp/game.png \
+  --report /tmp/game.json
+```
+
+Record an MP4 using the same composited WKWebView output:
+
+```bash
+dist/native/viewdeck record \
+  --project /path/to/project \
+  --npm-script dev \
+  --wait-for canvas \
+  --duration 6 \
+  --fps 12 \
+  --output /tmp/game.mp4 \
+  --screenshot /tmp/game-final.png \
+  --report /tmp/game.json
+```
+
+`capture`, `inspect`, and `record` accept an HTTP URL, a local HTML file, or a managed project command. Readiness can be tied to page load, a CSS selector, or a JavaScript expression. `--prepare-js` can establish a deterministic page state after readiness and before artifacts are captured. Reports include the final URL and title, device geometry, safe-area values, console messages, uncaught page errors, canvas dimensions, horizontal overflow, offscreen interactive elements, and interactive safe-area overlaps.
+
+Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-issues` for CI policies, and `viewdeck help` for the complete option list. JSON mode keeps ViewDeck's own result on stdout and writes development-server output to stderr.
+
+### Recorded QA scenarios
+
+Use the two-row QA controls at the bottom of the device library, click the red **Record** control, choose a `.viewdeck.json` destination, and interact with the page normally. Enable **Record Video** first when you also want an MP4; it is off by default so ordinary scenario recording stays lightweight. ViewDeck first clears site-scoped WebKit data and client storage, then reloads the page before timing begins so FTUE, tutorials, and cache-backed game state start cleanly. It records pointer down/move/up, mouse clicks and drags, keyboard down/up (including code, modifiers, location, composition, and repeat), and form changes. Every event contains both its timestamp from the start of the run and the interval since the previous event. A derived `gestures` section classifies clicks/taps, drags, swipes, direction, distance, duration, sampled points, source event IDs, and the interval since the previous gesture.
+
+While recording, click the bookmark control to capture a critical-moment checkpoint. Clicking Stop writes:
+
+- The editable, versioned `.viewdeck.json` scenario.
+- A complete MP4 of the recording when **Record Video** was enabled.
+- A timestamped PNG for every checkpoint.
+
+The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, and enabled header/footer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
+
+Click **Replay** beside Record to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the Replay control becomes a red **Stop** button; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
+
+When enabled, live QA video uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots. This keeps animated PixiJS, Three.js, canvas, and DOM content responsive while recording; explicit screenshots and checkpoints continue to use the high-fidelity composited snapshot path.
+
+AI agents can generate a complete, valid scenario skeleton without hand-authoring the device configuration:
+
+The repository includes a reusable [`viewdeck-qa`](.agents/skills/viewdeck-qa/SKILL.md) agent skill. Direct an agent with a prompt such as `Use $viewdeck-qa to test this game on iPhone 17 Pro Max and return the scenario, screenshots, video, and report.` The skill covers one-state audits, AI-authored and recorded scenarios, PixiJS/Three.js canvas input, React/DOM input, keyboard-only games, semantic waits, smart replay, and artifact review.
+
+```bash
+dist/native/viewdeck qa template http://localhost:5173 \
+  --device iphone-17-pro-max \
+  --name "keyboard smoke test" \
+  --output /tmp/gameplay.viewdeck.json
+```
+
+The generated JSON includes the selected device, resolution, DPR, safe areas, Safari state, header/footer state, source configuration, authoring rules, and copyable pointer, keyboard, selector-wait, JavaScript-wait, and fixed-delay examples. Its top-level `events` array is intentionally empty for an agent to populate.
+
+The same replay is available to scripts and AI agents. `--speed smart` preserves short gaps, pointer/mouse down-to-up gestures, and keyboard holds while capping long idle gaps at 250ms:
+
+```bash
+dist/native/viewdeck qa replay /tmp/gameplay.viewdeck.json \
+  --speed smart \
+  --artifacts /tmp/qa-checkpoints \
+  --video /tmp/qa-replay.mp4 \
+  --screenshot /tmp/qa-final.png \
+  --report /tmp/qa-replay.json \
+  --json
+```
+
+Use `--speed 0.5`, `1`, `2`, `4`, `smart`, or `max`. Smart replay writes a `timingPlan` containing every event’s original timestamp, effective timestamp, intervals, and adjustment reason, along with the total time saved. This keeps the source JSON auditable instead of rewriting its recorded timing.
+
+For readiness that genuinely matters, add a `wait` event with a CSS `selector`, a `javascript` condition, a fixed `delayMilliseconds`, or a combination. Selector and JavaScript waits support `timeoutMilliseconds` and `pollIntervalMilliseconds`; they execute semantically even when surrounding idle gaps are compressed. A replay report also contains the restored configuration, actual playback timing, page audit, console/page failures, server output, event errors, and all artifact paths.
+
+## Preview a project
+
+1. Choose a device profile in the left sidebar.
+2. Enter a URL in the toolbar and press Return, or choose a local project folder.
+3. To debug the loaded page without opening Safari, click the wrench button in the preview toolbar to open Web Inspector.
+4. Open the **Server** inspector and select a launch mode:
+   - **NPM script** discovers scripts in `package.json` and runs the selected script.
+   - **Static HTML file** loads an HTML file with read access to neighboring assets.
+   - **Custom command** runs a command in the selected project folder.
+5. Use **Stop process** to terminate the process and its child processes.
+
+ViewDeck reads the exact local URL printed by tools such as Vite, including the selected port. It does not assume that a project uses port 5173.
+
+Before ViewDeck launches a recognized development server, it records the ports that are already occupied. If the new server still announces one of those ports—for example, because two processes bound the same port on different loopback addresses—ViewDeck stops only the process it just launched and retries it on the next free port. This automatic retry supports common `--port`-aware commands such as Vite, Next.js, Astro, Nuxt, webpack, Parcel, Angular CLI, Vue CLI, and Gatsby, whether launched from an npm script or as a custom command.
+
+When a different project or launch command reuses a localhost port, ViewDeck clears that local origin's WebKit site data before loading it. This prevents service workers and cached assets from the previous project from appearing in the new preview. Restarting the same project preserves its cookies and local storage while still bypassing stale HTTP responses.
+
+The **Ports** inspector shows every detected listening process, grouped into development servers and other listeners. If multiple processes outside an automatically rerouted launch own the same port, ViewDeck marks the collision and refuses to open the ambiguous `localhost` URL until one listener is stopped.
+
+## Device profiles and safe areas
+
+The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. Duplicate a built-in profile to create an editable custom skin.
+
+ViewDeck exposes the selected safe-area values to the page:
+
+```css
+padding-top: var(--viewdeck-safe-area-inset-top, env(safe-area-inset-top));
+padding-right: var(--viewdeck-safe-area-inset-right, env(safe-area-inset-right));
+padding-bottom: var(--viewdeck-safe-area-inset-bottom, env(safe-area-inset-bottom));
+padding-left: var(--viewdeck-safe-area-inset-left, env(safe-area-inset-left));
+```
+
+The preview document also receives `data-viewdeck-device`, `data-viewdeck-engine`, and `data-viewdeck-safe-area` attributes. **Show safe-area guide** is visual only and deliberately does not alter the website. App profiles keep the page edge-to-edge behind both the iOS status bar and home indicator while reporting the full safe-area insets to the page. When the iOS Safari interface is enabled, its browser chrome reserves the obscured regions and the hosted page receives zero safe-area insets. The page meets the inside edge of the simulated device shell without an extra viewport seam. **Force page inside safe area** is a stricter opt-in mode: it uses native WebKit obscured-content insets on macOS 26 to shrink and adjust page layout around both obscured edges. Earlier macOS versions use a CSS-padding fallback.
+
+## HTML layers
+
+The **Layers** inspector can reserve space above or below the main page and render a standalone HTML document there. Imported layers are stored in the local library and may include CSS, JavaScript, images, and relative asset URLs.
+
+Starter files are available as [`sample-game-header.html`](examples/sample-game-header.html) and [`minimal-footer.html`](examples/minimal-footer.html). Keep layer files self-contained when possible so they remain portable between projects.
+
+## Development
+
+Run the native tests:
+
+```bash
+swift test --package-path native
+```
+
+Assemble the native application bundle:
+
+```bash
+zsh scripts/build-native-app.sh
+```
+
+The application lives in `native/Sources/ViewDeckNative/`. Tests and local-server fixtures live in `native/Tests/`.
+
+## Security and privacy
+
+ViewDeck does not add analytics or upload project files. The sites you load and the commands you run may have their own network behavior.
+
+Custom commands, npm scripts, and imported HTML can execute code with your user permissions. Only use content you trust. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Contributing
+
+Issues and pull requests are welcome. Please keep changes focused, include tests for behavior changes, and avoid committing proprietary websites, credentials, personal filesystem paths, or generated build artifacts.
+
+## License
+
+ViewDeck is available under the [MIT License](LICENSE).

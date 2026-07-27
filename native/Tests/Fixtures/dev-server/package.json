@@ -1,0 +1,8 @@
+{
+  "name": "viewdeck-native-test-server",
+  "private": true,
+  "scripts": {
+    "dev": "node server.mjs",
+    "collision": "node vite.mjs --host $VIEWDECK_FIXTURE_HOST --port $VIEWDECK_FIXTURE_PORT"
+  }
+}

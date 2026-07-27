@@ -1,0 +1,4 @@
+interface:
+  display_name: "ViewDeck QA"
+  short_description: "Run visual QA for web games with ViewDeck"
+  default_prompt: "Use $viewdeck-qa to create and replay a deterministic QA scenario for this web game."
