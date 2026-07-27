@@ -67,6 +67,45 @@ Use `inspect` instead when no screenshot is required. Add
 `--fail-on-page-error` for runtime errors. Add `--fail-on-issues` only when
 every layout warning should fail the run.
 
+## Wait for application readiness
+
+WebKit navigation completion means the main document loaded. It does not prove
+that React effects, API requests, asset decoding, canvas rendering, or
+animations have completed. ViewDeck does not infer generic network-idle or
+visual-stability state.
+
+For `capture`, `inspect`, and `record`, use `--wait-for` for a durable CSS
+selector and/or `--wait-js` for persistent application-owned state:
+
+```bash
+dist/native/viewdeck capture \
+  --project /absolute/path/to/game \
+  --npm-script dev \
+  --wait-for '[data-viewdeck-ready="true"]' \
+  --wait-js 'window.gameReady === true' \
+  --output /tmp/viewdeck-qa.example/ready.png \
+  --json
+```
+
+When both are supplied, both must become true. ViewDeck polls them after
+navigation and captures only after readiness plus the configured settle delay.
+Prefer persistent level-triggered state such as `window.gameReady === true` or
+`data-viewdeck-ready="true"` over a one-time event that a poller could miss.
+The existence of `canvas` proves only that the element was mounted, not that
+the game rendered its first usable frame.
+
+For replay, place a semantic `wait` event immediately after the input that
+starts asynchronous work and before every action or checkpoint that depends on
+its result. Adapt `authoring.eventExamples.waitForSelector` or
+`authoring.eventExamples.waitForJavaScript` from the generated template rather
+than inventing the event shape. Replay blocks subsequent timeline items while
+the condition remains false.
+
+A timed-out replay wait is reported as an error, but replay currently continues
+and may still write later screenshots or other artifacts. Never trust or act on
+dependent artifacts unless the replay report has top-level `ok: true` and no
+wait error in `errors`.
+
 ## Author a scenario
 
 Generate the scenario before adding inputs. Never invent or copy the device
