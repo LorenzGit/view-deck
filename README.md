@@ -2,6 +2,8 @@
 
 ViewDeck is a native macOS studio for previewing websites and local web projects inside configurable device frames. Its renderer is `WKWebView`, so previews use Apple WebKit directly.
 
+![ViewDeck showing a local web game in an iPhone device profile](docs/images/viewdeck-preview.png)
+
 > [!NOTE]
 > ViewDeck reproduces viewport geometry, device pixel ratio, safe areas, and optional browser chrome. It is not an iOS or Android operating-system emulator.
 
