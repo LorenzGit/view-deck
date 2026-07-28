@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>h5_left</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #070707;
+      color: #57595c;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    .rail {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-right: 1px solid rgba(255, 255, 255, 0.025);
+    }
+    .item {
+      position: absolute;
+      left: 76%;
+      display: grid;
+      place-items: center;
+      transform: translate(-50%, -50%);
+      color: #57595c;
+    }
+    .menu { top: 5.7%; }
+    .app-icon {
+      top: 16.4%;
+      width: 34%;
+      aspect-ratio: 1;
+      border-radius: 9px;
+      background: #62615b;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+    }
+    .search { top: 27.4%; }
+    .discover { top: 38%; }
+    svg {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <nav class="rail" aria-label="Primary">
+    <span class="item menu" aria-label="Menu">
+      <svg width="14" height="11" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" aria-hidden="true">
+        <path d="M2 2h24M2 11h24M2 20h24"/>
+      </svg>
+    </span>
+    <span class="item app-icon" aria-label="Blank app icon"></span>
+    <span class="item search" aria-label="Search">
+      <svg width="17" height="17" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.7" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="m19 19 7 7"/>
+      </svg>
+    </span>
+    <span class="item discover" aria-label="Discover">
+      <svg width="18" height="18" viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
+        <circle cx="15" cy="15" r="12"/>
+        <path d="m20 10-3 8-8 3 3-8 8-3Z"/>
+      </svg>
+    </span>
+  </nav>
+</body>
+</html>

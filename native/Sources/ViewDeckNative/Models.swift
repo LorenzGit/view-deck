@@ -284,20 +284,54 @@ enum PreviewMetrics {
         return device.safeArea.top
     }
 
+    static func headerTopInset(
+        device: DeviceProfile,
+        landscape: Bool,
+        headerHeight: CGFloat
+    ) -> CGFloat {
+        guard headerHeight > 0 else { return 0 }
+        return appStatusBarHeight(device: device, landscape: landscape)
+    }
+
     static func contentSize(
         device: DeviceProfile,
         landscape: Bool,
         headerHeight: CGFloat,
-        footerHeight: CGFloat
+        footerHeight: CGFloat,
+        leftWidth: CGFloat = 0,
+        rightWidth: CGFloat = 0
     ) -> CGSize {
         let width = landscape ? device.viewport.height : device.viewport.width
         let height = landscape ? device.viewport.width : device.viewport.height
+        let sideWidths = sideLayerWidths(
+            viewportWidth: width,
+            landscape: landscape,
+            leftWidth: leftWidth,
+            rightWidth: rightWidth
+        )
         let safariTop = device.safariChrome ? (landscape ? SafariChromeMetrics.landscapeTop : SafariChromeMetrics.portraitTop) : 0
         let safariBottom = device.safariChrome ? (landscape ? SafariChromeMetrics.landscapeBottom : SafariChromeMetrics.portraitBottom) : 0
-        return CGSize(
-            width: max(1, width),
-            height: max(1, height - safariTop - safariBottom - headerHeight - footerHeight)
+        let headerTopInset = headerTopInset(
+            device: device,
+            landscape: landscape,
+            headerHeight: headerHeight
         )
+        return CGSize(
+            width: max(1, width - sideWidths.left - sideWidths.right),
+            height: max(1, height - safariTop - safariBottom - headerTopInset - headerHeight - footerHeight)
+        )
+    }
+
+    static func sideLayerWidths(
+        viewportWidth: CGFloat,
+        landscape: Bool,
+        leftWidth: CGFloat,
+        rightWidth: CGFloat
+    ) -> (left: CGFloat, right: CGFloat) {
+        guard landscape else { return (0, 0) }
+        let resolvedLeft = min(max(0, leftWidth), max(0, viewportWidth - 1))
+        let resolvedRight = min(max(0, rightWidth), max(0, viewportWidth - resolvedLeft - 1))
+        return (resolvedLeft, resolvedRight)
     }
 }
 
@@ -316,9 +350,27 @@ enum DeviceStore {
     }
 }
 
-enum HTMLLayerKind: String, Codable {
+enum HTMLLayerKind: String, Codable, CaseIterable {
     case header
     case footer
+    case left
+    case right
+
+    var isSide: Bool {
+        self == .left || self == .right
+    }
+
+    var reservedDimension: String {
+        isSide ? "width" : "height"
+    }
+
+    var defaultExtent: CGFloat {
+        switch self {
+        case .header: 48
+        case .footer: 56
+        case .left, .right: 118
+        }
+    }
 }
 
 struct HTMLLayerReference: Codable, Equatable, Identifiable {
@@ -333,15 +385,43 @@ struct HTMLLayerReference: Codable, Equatable, Identifiable {
 enum HTMLLayerStore {
     private static let key = "viewdeck.native.html-layer-library"
     private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
+    private static let bundledLayerRenames = [
+        "sample-game-header": "h5_header",
+        "minimal-footer": "h5_footer",
+        "landscape-left-rail": "h5_left",
+        "landscape-right-rail": "h5_right"
+    ]
 
     static func load() -> [HTMLLayerReference] {
         guard let data = defaults.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([HTMLLayerReference].self, from: data)) ?? []
+        let decoded = (try? JSONDecoder().decode([HTMLLayerReference].self, from: data)) ?? []
+        let migrated = decoded.map(migrateBundledLayerReference)
+        if migrated != decoded { save(migrated) }
+        return migrated
     }
 
     static func save(_ layers: [HTMLLayerReference]) {
         guard let data = try? JSONEncoder().encode(layers) else { return }
         defaults.set(data, forKey: key)
+    }
+
+    private static func migrateBundledLayerReference(
+        _ reference: HTMLLayerReference
+    ) -> HTMLLayerReference {
+        var migrated = reference
+        let oldBase = reference.url.deletingPathExtension().lastPathComponent
+        guard let newBase = bundledLayerRenames[oldBase]
+            ?? bundledLayerRenames[reference.name] else { return reference }
+
+        migrated.name = newBase
+        let replacementURL = reference.url
+            .deletingLastPathComponent()
+            .appendingPathComponent(newBase)
+            .appendingPathExtension("html")
+        if FileManager.default.fileExists(atPath: replacementURL.path) {
+            migrated.path = replacementURL.path
+        }
+        return migrated
     }
 }
 

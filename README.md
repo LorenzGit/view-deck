@@ -14,7 +14,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Phone and tablet profiles expose touch-style input capabilities to page JavaScript and CSS, including coarse-pointer and no-hover media queries.
 - Custom device skins with editable viewport, shell, sensor, corner-radius, and DPR values.
 - Safe-area visualization, CSS variables, and optional page-padding injection.
-- Optional reusable HTML header and footer layers.
+- Optional reusable HTML header, footer, and landscape-only side rail layers.
 - WebGL and WebGPU content through `WKWebView` when supported by the host Mac.
 - One-click access to the full WebKit Inspector without opening Safari.
 - Links that request a new tab or window stay in the current preview; non-web URL schemes are handed to macOS.
@@ -99,7 +99,7 @@ While recording, click the bookmark control to capture a critical-moment checkpo
 - A complete MP4 of the recording when **Record Video** was enabled.
 - A timestamped PNG for every checkpoint.
 
-The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, and enabled header/footer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
+The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
 
 Click **Replay** beside Record to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the Replay control becomes a red **Stop** button; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
 
@@ -116,7 +116,7 @@ dist/native/viewdeck qa template http://localhost:5173 \
   --output /tmp/gameplay.viewdeck.json
 ```
 
-The generated JSON includes the selected device, resolution, DPR, safe areas, Safari state, header/footer state, source configuration, authoring rules, and copyable pointer, keyboard, selector-wait, JavaScript-wait, and fixed-delay examples. Its top-level `events` array is intentionally empty for an agent to populate.
+The generated JSON includes the selected device, resolution, DPR, safe areas, Safari state, page-layer state, source configuration, authoring rules, and copyable pointer, keyboard, selector-wait, JavaScript-wait, and fixed-delay examples. Its top-level `events` array is intentionally empty for an agent to populate.
 
 The same replay is available to scripts and AI agents. `--speed smart` preserves short gaps, pointer/mouse down-to-up gestures, and keyboard holds while capping long idle gaps at 250ms:
 
@@ -170,9 +170,23 @@ The preview document also receives `data-viewdeck-device`, `data-viewdeck-engine
 
 ## HTML layers
 
-The **Layers** inspector can reserve space above or below the main page and render a standalone HTML document there. Imported layers are stored in the local library and may include CSS, JavaScript, images, and relative asset URLs.
+The **Layers** inspector can reserve space around the main page and render a standalone HTML document in each region. Header and footer layers work in either orientation. Left and right rail layers reserve width and appear only in landscape, so selecting them does not change the portrait page viewport.
 
-Starter files are available as [`sample-game-header.html`](examples/sample-game-header.html) and [`minimal-footer.html`](examples/minimal-footer.html). Keep layer files self-contained when possible so they remain portable between projects.
+Choose **h5_left** and **h5_right** in the layer library for a ready-made pair modeled on a landscape reading interface. All bundled layers use the `h5_` prefix: [`h5_header.html`](examples/h5_header.html), [`h5_footer.html`](examples/h5_footer.html), [`h5_left.html`](examples/h5_left.html), and [`h5_right.html`](examples/h5_right.html).
+
+The CLI accepts the same layers for deterministic capture and QA templates:
+
+```bash
+dist/native/viewdeck capture http://localhost:5173 \
+  --orientation landscape \
+  --left examples/h5_left.html \
+  --left-width 118 \
+  --right examples/h5_right.html \
+  --right-width 118 \
+  --output /tmp/landscape.png
+```
+
+Imported layers are stored in the local library and may include CSS, JavaScript, images, and relative asset URLs. Keep layer files self-contained when possible so they remain portable between projects.
 
 ## Development
 

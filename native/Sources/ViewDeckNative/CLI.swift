@@ -157,7 +157,12 @@ public enum ViewDeckCommand {
                 throw CLIError.missingDirectory(project.path)
             }
         }
-        for file in [invocation.headerFile, invocation.footerFile].compactMap({ $0 }) {
+        for file in [
+            invocation.headerFile,
+            invocation.footerFile,
+            invocation.leftFile,
+            invocation.rightFile
+        ].compactMap({ $0 }) {
             guard manager.fileExists(atPath: file.path) else {
                 throw CLIError.missingFile(file.path)
             }
@@ -171,6 +176,12 @@ public enum ViewDeckCommand {
             try String(contentsOf: $0, encoding: .utf8)
         }
         let footerHTML = try invocation.footerFile.map {
+            try String(contentsOf: $0, encoding: .utf8)
+        }
+        let leftHTML = try invocation.leftFile.map {
+            try String(contentsOf: $0, encoding: .utf8)
+        }
+        let rightHTML = try invocation.rightFile.map {
             try String(contentsOf: $0, encoding: .utf8)
         }
         let header = QALayerConfiguration(
@@ -187,13 +198,29 @@ public enum ViewDeckCommand {
             sourcePath: invocation.footerFile?.path,
             baseURL: invocation.footerFile?.deletingLastPathComponent()
         )
+        let left = QALayerConfiguration(
+            kind: .left,
+            html: leftHTML,
+            height: invocation.leftWidth,
+            sourcePath: invocation.leftFile?.path,
+            baseURL: invocation.leftFile?.deletingLastPathComponent()
+        )
+        let right = QALayerConfiguration(
+            kind: .right,
+            html: rightHTML,
+            height: invocation.rightWidth,
+            sourcePath: invocation.rightFile?.path,
+            baseURL: invocation.rightFile?.deletingLastPathComponent()
+        )
         let configuration = QADeviceConfiguration.template(
             profile: device,
             landscape: invocation.landscape,
             showSafeArea: invocation.showSafeArea,
             applySafeAreaToPage: invocation.applySafeArea,
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
         let source = try qaTemplateSource(invocation)
         let now = Date()
@@ -508,7 +535,8 @@ public enum ViewDeckCommand {
                 "coordinateSystems": ["absoluteCSSPixels", "normalizedViewport"],
                 "configuration": [
                     "deviceProfile", "orientation", "CSSResolution", "physicalResolution",
-                    "DPR", "safeArea", "SafariChrome", "header", "footer", "source"
+                    "DPR", "safeArea", "SafariChrome", "header", "footer",
+                    "landscapeLeftRail", "landscapeRightRail", "source"
                 ]
             ],
             "captureScales": ["0.5...3", "deviceDPR"],
@@ -562,6 +590,10 @@ struct CLIInvocation {
     var headerHeight: CGFloat = 48
     var footerFile: URL?
     var footerHeight: CGFloat = 56
+    var leftFile: URL?
+    var leftWidth: CGFloat = 118
+    var rightFile: URL?
+    var rightWidth: CGFloat = 118
     var waitSelector: String?
     var waitJavaScript: String?
     var prepareJavaScript: String?
@@ -668,6 +700,14 @@ struct CLIInvocation {
                 value.footerFile = CLIPath.url(try requiredValue(for: argument))
             case "--footer-height":
                 value.footerHeight = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+            case "--left":
+                value.leftFile = CLIPath.url(try requiredValue(for: argument))
+            case "--left-width":
+                value.leftWidth = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+            case "--right":
+                value.rightFile = CLIPath.url(try requiredValue(for: argument))
+            case "--right-width":
+                value.rightWidth = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
             case "--wait-for":
                 value.waitSelector = try requiredValue(for: argument)
             case "--wait-js":
@@ -896,7 +936,12 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
                 throw CLIError.missingDirectory(project.path)
             }
         }
-        for file in [invocation.headerFile, invocation.footerFile].compactMap({ $0 }) {
+        for file in [
+            invocation.headerFile,
+            invocation.footerFile,
+            invocation.leftFile,
+            invocation.rightFile
+        ].compactMap({ $0 }) {
             guard manager.fileExists(atPath: file.path) else {
                 throw CLIError.missingFile(file.path)
             }
@@ -931,6 +976,16 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             preview.footerHTML = try String(contentsOf: footer, encoding: .utf8)
             preview.footerBaseURL = footer.deletingLastPathComponent()
             preview.footerHeight = invocation.footerHeight
+        }
+        if let left = invocation.leftFile {
+            preview.leftHTML = try String(contentsOf: left, encoding: .utf8)
+            preview.leftBaseURL = left.deletingLastPathComponent()
+            preview.leftWidth = invocation.leftWidth
+        }
+        if let right = invocation.rightFile {
+            preview.rightHTML = try String(contentsOf: right, encoding: .utf8)
+            preview.rightBaseURL = right.deletingLastPathComponent()
+            preview.rightWidth = invocation.rightWidth
         }
 
         let size = preview.logicalSize
@@ -1347,6 +1402,22 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             preview.footerHeight = CGFloat(configuration.footer.heightCSSPixels)
             preview.footerBaseURL = configuration.footer.baseURL.flatMap(URL.init(string:))
                 ?? configuration.footer.sourcePath
+                    .map(URL.init(fileURLWithPath:))
+                    .map { $0.deletingLastPathComponent() }
+        }
+        if let left = configuration.left, left.enabled {
+            preview.leftHTML = left.html
+            preview.leftWidth = CGFloat(left.reservedExtentCSSPixels)
+            preview.leftBaseURL = left.baseURL.flatMap(URL.init(string:))
+                ?? left.sourcePath
+                    .map(URL.init(fileURLWithPath:))
+                    .map { $0.deletingLastPathComponent() }
+        }
+        if let right = configuration.right, right.enabled {
+            preview.rightHTML = right.html
+            preview.rightWidth = CGFloat(right.reservedExtentCSSPixels)
+            preview.rightBaseURL = right.baseURL.flatMap(URL.init(string:))
+                ?? right.sourcePath
                     .map(URL.init(fileURLWithPath:))
                     .map { $0.deletingLastPathComponent() }
         }
@@ -1974,6 +2045,10 @@ private enum CLIHelp {
       --header-height <points>       Header height (default: 48)
       --footer <file.html>           Add an HTML footer layer
       --footer-height <points>       Footer height (default: 56)
+      --left <file.html>             Add a landscape left rail layer
+      --left-width <points>          Left rail width (default: 118)
+      --right <file.html>            Add a landscape right rail layer
+      --right-width <points>         Right rail width (default: 118)
 
     READINESS
       --wait-for <selector>          Wait for a CSS selector

@@ -45,6 +45,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var logShowsPlaceholder = false
     private let headerLayerPopup = NSPopUpButton()
     private let footerLayerPopup = NSPopUpButton()
+    private let leftLayerPopup = NSPopUpButton()
+    private let rightLayerPopup = NSPopUpButton()
     private let toolbarModel = DeckToolbarModel()
     private let server = DevServerController()
     private var layerLibrary = HTMLLayerStore.load()
@@ -58,8 +60,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var localhostScanError: String?
     private var localhostRefreshTimer: Timer?
     private var sampleHeaderEnabled = false
+    private var sampleLeftEnabled = false
+    private var sampleRightEnabled = false
     private var headerPath: URL?
     private var footerPath: URL?
+    private var leftPath: URL?
+    private var rightPath: URL?
     private let sidebarInitialWidth: CGFloat = 230
     private let inspectorInitialWidth: CGFloat = 320
     private let sidebarMinimumWidth: CGFloat = 180
@@ -357,7 +363,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         inspectorTabs.action = #selector(inspectorTabChanged)
         inspectorTabs.setToolTip("Edit viewport, DPR, and browser simulation", forSegment: 0)
         inspectorTabs.setToolTip("Edit safe-area insets and page behavior", forSegment: 1)
-        inspectorTabs.setToolTip("Add optional HTML header and footer layers", forSegment: 2)
+        inspectorTabs.setToolTip("Add optional HTML layers around the page", forSegment: 2)
         inspectorTabs.setToolTip("Preview static HTML or run a local command", forSegment: 3)
         inspectorTabs.setToolTip("Inspect processes listening on localhost ports", forSegment: 4)
         inspectorTabs.translatesAutoresizingMaskIntoConstraints = false
@@ -507,12 +513,50 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             editFooter,
             formRow("Reserved height", field: inspectorNumberField(canvas.preview.footerHeight, action: #selector(footerHeightChanged)))
         ]))
+        inspectorStack.addArrangedSubview(sectionLabel("LANDSCAPE LEFT"))
+        configureLayerPopup(leftLayerPopup, kind: .left, action: #selector(leftLayerSelected(_:)))
+        let importLeft = makeWideButton("Import left rail HTML…", action: #selector(chooseLeft))
+        importLeft.toolTip = "Import an existing HTML file into the left rail library"
+        importLeft.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: nil)
+        importLeft.imagePosition = .imageLeading
+        let editLeft = makeWideButton(
+            sampleLeftEnabled || leftPath != nil ? "Edit left rail HTML…" : "Create left rail HTML…",
+            action: #selector(editLeftLayer)
+        )
+        editLeft.toolTip = "Create or edit the selected reusable left rail HTML"
+        editLeft.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
+        editLeft.imagePosition = .imageLeading
+        inspectorStack.addArrangedSubview(inspectorCard([
+            leftLayerPopup,
+            importLeft,
+            editLeft,
+            formRow("Reserved width", field: inspectorNumberField(canvas.preview.leftWidth, action: #selector(leftWidthChanged)))
+        ]))
+        inspectorStack.addArrangedSubview(sectionLabel("LANDSCAPE RIGHT"))
+        configureLayerPopup(rightLayerPopup, kind: .right, action: #selector(rightLayerSelected(_:)))
+        let importRight = makeWideButton("Import right rail HTML…", action: #selector(chooseRight))
+        importRight.toolTip = "Import an existing HTML file into the right rail library"
+        importRight.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: nil)
+        importRight.imagePosition = .imageLeading
+        let editRight = makeWideButton(
+            sampleRightEnabled || rightPath != nil ? "Edit right rail HTML…" : "Create right rail HTML…",
+            action: #selector(editRightLayer)
+        )
+        editRight.toolTip = "Create or edit the selected reusable right rail HTML"
+        editRight.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
+        editRight.imagePosition = .imageLeading
+        inspectorStack.addArrangedSubview(inspectorCard([
+            rightLayerPopup,
+            importRight,
+            editRight,
+            formRow("Reserved width", field: inspectorNumberField(canvas.preview.rightWidth, action: #selector(rightWidthChanged)))
+        ]))
         let clear = makeWideButton("Clear active layers", action: #selector(clearLayers))
-        clear.toolTip = "Remove the active header and footer from the preview"
+        clear.toolTip = "Remove every active page layer from the preview"
         clear.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: nil)
         clear.imagePosition = .imageLeading
         inspectorStack.addArrangedSubview(clear)
-        inspectorStack.addArrangedSubview(helpText("Imported files stay in this library for reuse. They reload from disk when selected and run in isolated WKWebViews."))
+        inspectorStack.addArrangedSubview(helpText("Left and right rails reserve page width only in landscape. Imported files stay in this library for reuse, reload from disk when selected, and run in isolated WKWebViews."))
     }
 
     private func buildServerInspector() {
@@ -1033,10 +1077,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let source = currentQASourceConfiguration()
         let header = currentQALayerConfiguration(kind: .header)
         let footer = currentQALayerConfiguration(kind: .footer)
+        let left = currentQALayerConfiguration(kind: .left)
+        let right = currentQALayerConfiguration(kind: .right)
         let configuration = QADeviceConfiguration.capture(
             preview: canvas.preview,
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
         let recorder = QAScenarioRecorder(
             preview: canvas.preview,
@@ -1147,20 +1195,49 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func currentQALayerConfiguration(kind: HTMLLayerKind) -> QALayerConfiguration {
-        let isHeader = kind == .header
-        let html = isHeader ? canvas.preview.headerHTML : canvas.preview.footerHTML
-        let path = isHeader ? headerPath : footerPath
+        let html: String?
+        let path: URL?
+        let baseURL: URL?
+        let extent: CGFloat
+        let builtInEnabled: Bool
+        switch kind {
+        case .header:
+            html = canvas.preview.headerHTML
+            path = headerPath
+            baseURL = canvas.preview.headerBaseURL
+            extent = canvas.preview.headerHeight
+            builtInEnabled = sampleHeaderEnabled
+        case .footer:
+            html = canvas.preview.footerHTML
+            path = footerPath
+            baseURL = canvas.preview.footerBaseURL
+            extent = canvas.preview.footerHeight
+            builtInEnabled = false
+        case .left:
+            html = canvas.preview.leftHTML
+            path = leftPath
+            baseURL = canvas.preview.leftBaseURL
+            extent = canvas.preview.leftWidth
+            builtInEnabled = sampleLeftEnabled
+        case .right:
+            html = canvas.preview.rightHTML
+            path = rightPath
+            baseURL = canvas.preview.rightBaseURL
+            extent = canvas.preview.rightWidth
+            builtInEnabled = sampleRightEnabled
+        }
         let reference = path.flatMap { path in
             layerLibrary.first { $0.kind == kind && $0.path == path.path }
         }
+        let builtIn = builtInEnabled ? Self.builtInLayer(for: kind) : nil
         return QALayerConfiguration(
             kind: kind,
             html: html,
-            height: isHeader ? canvas.preview.headerHeight : canvas.preview.footerHeight,
+            height: extent,
             sourcePath: path?.path,
-            baseURL: isHeader ? canvas.preview.headerBaseURL : canvas.preview.footerBaseURL,
-            identifier: isHeader && sampleHeaderEnabled ? "builtin-sample-header" : reference?.id,
-            name: isHeader && sampleHeaderEnabled ? "Sample game header" : reference?.name
+            baseURL: baseURL,
+            identifier: builtIn?.id ?? reference?.id,
+            name: builtIn?.name ?? reference?.name
         )
     }
 
@@ -1185,8 +1262,36 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             ?? footerPath?.deletingLastPathComponent()
         canvas.preview.footerHeight = CGFloat(footer.heightCSSPixels)
         canvas.preview.footerHTML = footer.enabled ? footer.html : nil
+
+        applyRecordedSideLayer(configuration.left, kind: .left)
+        applyRecordedSideLayer(configuration.right, kind: .right)
         updateStatus()
         rebuildInspector()
+    }
+
+    private func applyRecordedSideLayer(_ layer: QALayerConfiguration?, kind: HTMLLayerKind) {
+        guard kind.isSide else { return }
+        let builtIn = layer.flatMap { configuration in
+            Self.builtInLayer(for: kind).flatMap { $0.id == configuration.identifier ? $0 : nil }
+        }
+        let path = layer?.sourcePath.map(URL.init(fileURLWithPath:))
+        let baseURL = layer?.baseURL.flatMap(URL.init(string:))
+            ?? path?.deletingLastPathComponent()
+        let html = layer?.enabled == true ? layer?.html : nil
+        let extent = CGFloat(layer?.reservedExtentCSSPixels ?? Double(kind.defaultExtent))
+        if kind == .left {
+            sampleLeftEnabled = builtIn != nil
+            leftPath = path
+            canvas.preview.leftBaseURL = baseURL
+            canvas.preview.leftWidth = extent
+            canvas.preview.leftHTML = html
+        } else {
+            sampleRightEnabled = builtIn != nil
+            rightPath = path
+            canvas.preview.rightBaseURL = baseURL
+            canvas.preview.rightWidth = extent
+            canvas.preview.rightHTML = html
+        }
     }
 
     private func loadRecordedSource(_ source: QASourceConfiguration) {
@@ -1500,8 +1605,34 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         updateStatus(); rebuildInspector()
     }
 
+    @objc private func chooseLeft() { chooseSideLayer(kind: .left) }
+    @objc private func chooseRight() { chooseSideLayer(kind: .right) }
+
+    private func chooseSideLayer(kind: HTMLLayerKind) {
+        guard kind.isSide, let result = chooseHTMLFile() else { return }
+        addLayerToLibrary(url: result.url, kind: kind)
+        let reference = layerLibrary.first { $0.path == result.url.path && $0.kind == kind }
+        if kind == .left {
+            leftPath = result.url
+            sampleLeftEnabled = false
+            canvas.preview.leftBaseURL = result.url.deletingLastPathComponent()
+            canvas.preview.leftHTML = result.html
+        } else {
+            rightPath = result.url
+            sampleRightEnabled = false
+            canvas.preview.rightBaseURL = result.url.deletingLastPathComponent()
+            canvas.preview.rightHTML = result.html
+        }
+        if let reference {
+            UserDefaults.standard.set(reference.id, forKey: activeLayerDefaultsKey(kind))
+        }
+        updateStatus(); rebuildInspector()
+    }
+
     @objc private func editHeaderLayer() { presentLayerEditor(kind: .header) }
     @objc private func editFooterLayer() { presentLayerEditor(kind: .footer) }
+    @objc private func editLeftLayer() { presentLayerEditor(kind: .left) }
+    @objc private func editRightLayer() { presentLayerEditor(kind: .right) }
 
     @objc private func headerLayerSelected(_ sender: NSPopUpButton) {
         let identifier = sender.selectedItem?.representedObject as? String
@@ -1543,15 +1674,75 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         updateStatus(); rebuildInspector()
     }
 
+    @objc private func leftLayerSelected(_ sender: NSPopUpButton) {
+        selectSideLayer(sender, kind: .left)
+    }
+
+    @objc private func rightLayerSelected(_ sender: NSPopUpButton) {
+        selectSideLayer(sender, kind: .right)
+    }
+
+    private func selectSideLayer(_ sender: NSPopUpButton, kind: HTMLLayerKind) {
+        guard kind.isSide else { return }
+        let identifier = sender.selectedItem?.representedObject as? String
+        let builtIn = Self.builtInLayer(for: kind)
+        let path: URL?
+        let html: String?
+        let baseURL: URL?
+        let isBuiltIn: Bool
+        if identifier == builtIn?.id {
+            path = nil
+            html = builtIn?.html
+            baseURL = nil
+            isBuiltIn = true
+            UserDefaults.standard.set(identifier, forKey: activeLayerDefaultsKey(kind))
+        } else if let layer = layerLibrary.first(where: { $0.id == identifier }) {
+            path = layer.url
+            html = try? String(contentsOf: layer.url, encoding: .utf8)
+            baseURL = layer.url.deletingLastPathComponent()
+            isBuiltIn = false
+            UserDefaults.standard.set(layer.id, forKey: activeLayerDefaultsKey(kind))
+        } else {
+            path = nil
+            html = nil
+            baseURL = nil
+            isBuiltIn = false
+            UserDefaults.standard.removeObject(forKey: activeLayerDefaultsKey(kind))
+        }
+        if kind == .left {
+            leftPath = path
+            sampleLeftEnabled = isBuiltIn
+            canvas.preview.leftBaseURL = baseURL
+            canvas.preview.leftHTML = html
+        } else {
+            rightPath = path
+            sampleRightEnabled = isBuiltIn
+            canvas.preview.rightBaseURL = baseURL
+            canvas.preview.rightHTML = html
+        }
+        updateStatus(); rebuildInspector()
+    }
+
     @objc private func headerHeightChanged(_ sender: NSTextField) { canvas.preview.headerHeight = max(20, sender.doubleValue); updateStatus() }
     @objc private func footerHeightChanged(_ sender: NSTextField) { canvas.preview.footerHeight = max(20, sender.doubleValue); updateStatus() }
+    @objc private func leftWidthChanged(_ sender: NSTextField) { canvas.preview.leftWidth = max(20, sender.doubleValue); updateStatus() }
+    @objc private func rightWidthChanged(_ sender: NSTextField) { canvas.preview.rightWidth = max(20, sender.doubleValue); updateStatus() }
     @objc private func clearLayers() {
-        headerPath = nil; footerPath = nil; sampleHeaderEnabled = false
+        headerPath = nil; footerPath = nil; leftPath = nil; rightPath = nil
+        sampleHeaderEnabled = false; sampleLeftEnabled = false; sampleRightEnabled = false
         canvas.preview.headerBaseURL = nil; canvas.preview.footerBaseURL = nil
+        canvas.preview.leftBaseURL = nil; canvas.preview.rightBaseURL = nil
         canvas.preview.headerHTML = nil; canvas.preview.footerHTML = nil
+        canvas.preview.leftHTML = nil; canvas.preview.rightHTML = nil
         UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-header-layer")
         UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-footer-layer")
+        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-left-layer")
+        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-right-layer")
         updateStatus(); rebuildInspector()
+    }
+
+    private func activeLayerDefaultsKey(_ kind: HTMLLayerKind) -> String {
+        "viewdeck.native.active-\(kind.rawValue)-layer"
     }
 
     private func chooseHTMLFile() -> (url: URL, html: String)? {
@@ -1569,20 +1760,44 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func presentLayerEditor(kind: HTMLLayerKind) {
-        let activePath = kind == .header ? headerPath : footerPath
+        let activePath: URL?
+        let isBuiltIn: Bool
+        let liveHTML: String?
+        let extent: CGFloat
+        switch kind {
+        case .header:
+            activePath = headerPath
+            isBuiltIn = sampleHeaderEnabled
+            liveHTML = canvas.preview.headerHTML
+            extent = canvas.preview.headerHeight
+        case .footer:
+            activePath = footerPath
+            isBuiltIn = false
+            liveHTML = canvas.preview.footerHTML
+            extent = canvas.preview.footerHeight
+        case .left:
+            activePath = leftPath
+            isBuiltIn = sampleLeftEnabled
+            liveHTML = canvas.preview.leftHTML
+            extent = canvas.preview.leftWidth
+        case .right:
+            activePath = rightPath
+            isBuiltIn = sampleRightEnabled
+            liveHTML = canvas.preview.rightHTML
+            extent = canvas.preview.rightWidth
+        }
         let existing = activePath.flatMap { path in
             layerLibrary.first(where: { $0.kind == kind && $0.path == path.path })
         }
-        let isBuiltIn = kind == .header && sampleHeaderEnabled
+        let builtIn = isBuiltIn ? Self.builtInLayer(for: kind) : nil
         let currentHTML: String = {
             if let existing, let html = try? String(contentsOf: existing.url, encoding: .utf8) { return html }
-            if isBuiltIn { return Self.sampleHeaderHTML }
-            if let live = kind == .header ? canvas.preview.headerHTML : canvas.preview.footerHTML { return live }
+            if let builtIn { return builtIn.html }
+            if let liveHTML { return liveHTML }
             return Self.layerTemplate(kind: kind)
         }()
-        let initialName = existing?.name ?? (isBuiltIn ? "Sample game header" : "Untitled \(kind.rawValue)")
-        let height = kind == .header ? canvas.preview.headerHeight : canvas.preview.footerHeight
-        let model = LayerEditorModel(name: initialName, html: currentHTML, reservedHeight: height)
+        let initialName = existing?.name ?? builtIn?.name ?? "h5_\(kind.rawValue)"
+        let model = LayerEditorModel(name: initialName, html: currentHTML, reservedExtent: extent)
 
         let panel = NSPanel(
             contentRect: CGRect(x: 0, y: 0, width: 760, height: 650),
@@ -1634,19 +1849,34 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             }
             HTMLLayerStore.save(layerLibrary)
 
-            if kind == .header {
+            switch kind {
+            case .header:
                 sampleHeaderEnabled = false
                 headerPath = destination
                 canvas.preview.headerBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.headerHTML = model.html
-                canvas.preview.headerHeight = model.parsedHeight
+                canvas.preview.headerHeight = model.parsedExtent
                 UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-header-layer")
-            } else {
+            case .footer:
                 footerPath = destination
                 canvas.preview.footerBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.footerHTML = model.html
-                canvas.preview.footerHeight = model.parsedHeight
+                canvas.preview.footerHeight = model.parsedExtent
                 UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-footer-layer")
+            case .left:
+                sampleLeftEnabled = false
+                leftPath = destination
+                canvas.preview.leftBaseURL = destination.deletingLastPathComponent()
+                canvas.preview.leftHTML = model.html
+                canvas.preview.leftWidth = model.parsedExtent
+                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-left-layer")
+            case .right:
+                sampleRightEnabled = false
+                rightPath = destination
+                canvas.preview.rightBaseURL = destination.deletingLastPathComponent()
+                canvas.preview.rightHTML = model.html
+                canvas.preview.rightWidth = model.parsedExtent
+                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-right-layer")
             }
             updateStatus(); rebuildInspector()
         } catch {
@@ -1694,17 +1924,46 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             canvas.preview.footerBaseURL = layer.url.deletingLastPathComponent()
             canvas.preview.footerHTML = html
         }
+        restoreSavedSideLayer(kind: .left, defaults: defaults)
+        restoreSavedSideLayer(kind: .right, defaults: defaults)
         rebuildInspector()
         updateStatus()
+    }
+
+    private func restoreSavedSideLayer(kind: HTMLLayerKind, defaults: UserDefaults) {
+        guard kind.isSide,
+              let identifier = defaults.string(forKey: activeLayerDefaultsKey(kind)) else { return }
+        let builtIn = Self.builtInLayer(for: kind)
+        if identifier == builtIn?.id {
+            if kind == .left {
+                sampleLeftEnabled = true
+                canvas.preview.leftHTML = builtIn?.html
+            } else {
+                sampleRightEnabled = true
+                canvas.preview.rightHTML = builtIn?.html
+            }
+            return
+        }
+        guard let layer = layerLibrary.first(where: { $0.id == identifier && $0.kind == kind }),
+              let html = try? String(contentsOf: layer.url, encoding: .utf8) else { return }
+        if kind == .left {
+            leftPath = layer.url
+            canvas.preview.leftBaseURL = layer.url.deletingLastPathComponent()
+            canvas.preview.leftHTML = html
+        } else {
+            rightPath = layer.url
+            canvas.preview.rightBaseURL = layer.url.deletingLastPathComponent()
+            canvas.preview.rightHTML = html
+        }
     }
 
     private func configureLayerPopup(_ popup: NSPopUpButton, kind: HTMLLayerKind, action: Selector) {
         popup.removeAllItems()
         popup.addItem(withTitle: "None")
         popup.lastItem?.representedObject = "none"
-        if kind == .header {
-            popup.addItem(withTitle: "Sample game header")
-            popup.lastItem?.representedObject = "builtin-sample-header"
+        if let builtIn = Self.builtInLayer(for: kind) {
+            popup.addItem(withTitle: builtIn.name)
+            popup.lastItem?.representedObject = builtIn.id
         }
         for layer in layerLibrary.filter({ $0.kind == kind }) {
             popup.addItem(withTitle: layer.name)
@@ -1712,15 +1971,23 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
         popup.target = self
         popup.action = action
-        popup.toolTip = kind == .header ? "Choose the active header layer" : "Choose the active footer layer"
+        popup.toolTip = "Choose the active \(kind.rawValue) layer"
         configureDeckPopup(popup)
         if popup.translatesAutoresizingMaskIntoConstraints {
             popup.translatesAutoresizingMaskIntoConstraints = false
             popup.heightAnchor.constraint(equalToConstant: 34).isActive = true
         }
-        if kind == .header, sampleHeaderEnabled {
-            popup.selectItem(withTitle: "Sample game header")
-        } else if let activePath = kind == .header ? headerPath?.path : footerPath?.path,
+        let builtInEnabled = kind == .header ? sampleHeaderEnabled
+            : kind == .left ? sampleLeftEnabled
+            : kind == .right ? sampleRightEnabled
+            : false
+        let activePath = kind == .header ? headerPath?.path
+            : kind == .footer ? footerPath?.path
+            : kind == .left ? leftPath?.path
+            : rightPath?.path
+        if builtInEnabled, let builtIn = Self.builtInLayer(for: kind) {
+            popup.selectItem(withTitle: builtIn.name)
+        } else if let activePath,
                   let active = layerLibrary.first(where: { $0.kind == kind && $0.path == activePath }) {
             popup.selectItem(withTitle: active.name)
         } else {
@@ -2286,8 +2553,27 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private static func layerTemplate(kind: HTMLLayerKind) -> String {
-        let alignment = kind == .header ? "border-bottom" : "border-top"
-        let title = kind == .header ? "Preview header" : "Preview footer"
+        let alignment: String
+        let title: String
+        let bodyLayout: String
+        switch kind {
+        case .header:
+            alignment = "border-bottom"
+            title = "h5_header"
+            bodyLayout = "align-items: center; padding: 0 16px;"
+        case .footer:
+            alignment = "border-top"
+            title = "h5_footer"
+            bodyLayout = "align-items: center; padding: 0 16px;"
+        case .left:
+            alignment = "border-right"
+            title = "h5_left"
+            bodyLayout = "align-items: center; justify-content: center; writing-mode: vertical-rl;"
+        case .right:
+            alignment = "border-left"
+            title = "h5_right"
+            bodyLayout = "align-items: center; justify-content: center; writing-mode: vertical-rl;"
+        }
         return """
         <!doctype html>
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2296,8 +2582,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
           html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
           body {
             display: flex;
-            align-items: center;
-            padding: 0 16px;
+            \(bodyLayout)
             background: #0a0d11;
             color: #f0f3f5;
             font: 600 15px -apple-system, BlinkMacSystemFont, sans-serif;
@@ -2308,9 +2593,55 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         """
     }
 
+    private static func builtInLayer(for kind: HTMLLayerKind) -> (id: String, name: String, html: String)? {
+        switch kind {
+        case .header:
+            ("builtin-sample-header", "h5_header", sampleHeaderHTML)
+        case .footer:
+            nil
+        case .left:
+            ("builtin-reference-left-rail", "h5_left", referenceLeftRailHTML)
+        case .right:
+            ("builtin-reference-right-rail", "h5_right", referenceRightRailHTML)
+        }
+    }
+
     private static let sampleHeaderHTML = """
-    <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+    <!doctype html><title>h5_header</title><meta name="viewport" content="width=device-width,initial-scale=1">
     <style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#050505;color:#d8d9db;font-family:-apple-system}header{height:100%;display:flex;align-items:center;gap:13px;padding:0 14px;border-bottom:1px solid #242629}.menu{font-size:21px;color:white}.info{font-size:18px}.title{flex:1;font-size:16px;white-space:nowrap}.actions{display:flex;gap:16px;color:#8b8d91;font-size:18px}.like{color:white}</style>
     <header><span class="menu">☰</span><span class="info">ⓘ</span><span class="title">Preview App</span><span class="actions"><span class="like">♥</span><span>⌯</span><span>□</span><span>⋮</span></span></header>
+    """
+
+    private static let referenceLeftRailHTML = """
+    <!doctype html><title>h5_left</title><meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+    *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#070707;color:#57595c;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+    .rail{position:relative;width:100%;height:100%;border-right:1px solid rgba(255,255,255,.025)}
+    .item{position:absolute;left:76%;display:grid;place-items:center;transform:translate(-50%,-50%);color:#57595c}
+    .menu{top:5.7%}.app-icon{top:16.4%;width:34%;aspect-ratio:1;border-radius:9px;background:#62615b;box-shadow:0 0 0 1px rgba(255,255,255,.04)}
+    .search{top:27.4%}.discover{top:38%}svg{display:block;max-width:100%;max-height:100%}
+    </style>
+    <nav class="rail" aria-label="Primary">
+      <span class="item menu" aria-label="Menu"><svg width="14" height="11" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M2 2h24M2 11h24M2 20h24"/></svg></span>
+      <span class="item app-icon" aria-label="Blank app icon"></span>
+      <span class="item search" aria-label="Search"><svg width="17" height="17" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.7"><circle cx="12" cy="12" r="9"/><path d="m19 19 7 7"/></svg></span>
+      <span class="item discover" aria-label="Discover"><svg width="18" height="18" viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6"><circle cx="15" cy="15" r="12"/><path d="m20 10-3 8-8 3 3-8 8-3Z"/></svg></span>
+    </nav>
+    """
+
+    private static let referenceRightRailHTML = """
+    <!doctype html><title>h5_right</title><meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+    *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#070707;color:#57595c;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+    .rail{position:relative;width:100%;height:100%;border-left:1px solid rgba(255,255,255,.025)}
+    button{position:absolute;left:24%;display:grid;place-items:center;width:54%;aspect-ratio:1;transform:translate(-50%,-50%);padding:0;border:0;background:transparent;color:#57595c}
+    button:focus-visible{outline:2px solid #b8ee55;outline-offset:4px;border-radius:8px}.like{top:5.7%}.share{top:16%}.comment{top:26.3%}.more{top:36.8%}svg{display:block;max-width:17px;max-height:17px}
+    </style>
+    <aside class="rail" aria-label="Page actions">
+      <button class="like" type="button" aria-label="Like"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"><path d="M10 28H5V13h5v15Zm0-13 6-11c1-2 4-.6 3.4 1.7L18 11h7.5c2.2 0 3.8 2 3.2 4.1l-2.7 10A4 4 0 0 1 22.2 28H10V15Z"/></svg></button>
+      <button class="share" type="button" aria-label="Share"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6"><circle cx="24" cy="7" r="3.5"/><circle cx="8" cy="16" r="3.5"/><circle cx="24" cy="25" r="3.5"/><path d="m11 14 10-5.5M11 18l10 5.5"/></svg></button>
+      <button class="comment" type="button" aria-label="Comment"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"><path d="M5 6h22v16H12l-7 6V6Z"/></svg></button>
+      <button class="more" type="button" aria-label="More"><svg viewBox="0 0 32 32" fill="currentColor"><circle cx="16" cy="7" r="2.4"/><circle cx="16" cy="16" r="2.4"/><circle cx="16" cy="25" r="2.4"/></svg></button>
+    </aside>
     """
 }

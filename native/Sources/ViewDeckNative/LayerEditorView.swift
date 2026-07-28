@@ -3,16 +3,16 @@ import SwiftUI
 final class LayerEditorModel: ObservableObject {
     @Published var name: String
     @Published var html: String
-    @Published var reservedHeight: String
+    @Published var reservedExtent: String
 
-    init(name: String, html: String, reservedHeight: CGFloat) {
+    init(name: String, html: String, reservedExtent: CGFloat) {
         self.name = name
         self.html = html
-        self.reservedHeight = reservedHeight.formatted()
+        self.reservedExtent = reservedExtent.formatted()
     }
 
-    var parsedHeight: CGFloat {
-        max(20, min(600, Double(reservedHeight) ?? 48))
+    var parsedExtent: CGFloat {
+        max(20, min(600, Double(reservedExtent) ?? 48))
     }
 
     var canSave: Bool {
@@ -83,7 +83,7 @@ struct LayerEditorView: View {
 
     private var header: some View {
         HStack(spacing: 13) {
-            Image(systemName: kind == .header ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled")
+            Image(systemName: layerIcon)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(LayerEditorPalette.accent)
                 .frame(width: 38, height: 38)
@@ -94,7 +94,9 @@ struct LayerEditorView: View {
                 Text("\(editingExisting ? "Edit" : "Create") \(kind.rawValue) layer")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(LayerEditorPalette.text)
-                Text("Reusable HTML rendered outside the page viewport")
+                Text(kind.isSide
+                    ? "Reusable HTML shown beside the page in landscape"
+                    : "Reusable HTML rendered outside the page viewport")
                     .font(.system(size: 11))
                     .foregroundStyle(LayerEditorPalette.muted)
             }
@@ -109,8 +111,21 @@ struct LayerEditorView: View {
         HStack(alignment: .top, spacing: 14) {
             editorField("LAYER NAME", text: $model.name, prompt: "Example: Product toolbar")
                 .frame(maxWidth: .infinity)
-            editorField("RESERVED HEIGHT", text: $model.reservedHeight, prompt: "48")
+            editorField(
+                "RESERVED \(kind.reservedDimension.uppercased())",
+                text: $model.reservedExtent,
+                prompt: kind.defaultExtent.formatted()
+            )
                 .frame(width: 156)
+        }
+    }
+
+    private var layerIcon: String {
+        switch kind {
+        case .header: "rectangle.topthird.inset.filled"
+        case .footer: "rectangle.bottomthird.inset.filled"
+        case .left: "rectangle.leadingthird.inset.filled"
+        case .right: "rectangle.trailingthird.inset.filled"
         }
     }
 

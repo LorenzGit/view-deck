@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>h5_right</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #070707;
+      color: #57595c;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    .rail {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-left: 1px solid rgba(255, 255, 255, 0.025);
+    }
+    button {
+      position: absolute;
+      left: 24%;
+      display: grid;
+      width: 54%;
+      aspect-ratio: 1;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      transform: translate(-50%, -50%);
+      background: transparent;
+      color: #57595c;
+    }
+    button:focus-visible {
+      border-radius: 8px;
+      outline: 2px solid #b8ee55;
+      outline-offset: 4px;
+    }
+    .like { top: 5.7%; }
+    .share { top: 16%; }
+    .comment { top: 26.3%; }
+    .more { top: 36.8%; }
+    svg {
+      display: block;
+      max-width: 17px;
+      max-height: 17px;
+    }
+  </style>
+</head>
+<body>
+  <aside class="rail" aria-label="Page actions">
+    <button class="like" type="button" aria-label="Like">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 28H5V13h5v15Zm0-13 6-11c1-2 4-.6 3.4 1.7L18 11h7.5c2.2 0 3.8 2 3.2 4.1l-2.7 10A4 4 0 0 1 22.2 28H10V15Z"/>
+      </svg>
+    </button>
+    <button class="share" type="button" aria-label="Share">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
+        <circle cx="24" cy="7" r="3.5"/>
+        <circle cx="8" cy="16" r="3.5"/>
+        <circle cx="24" cy="25" r="3.5"/>
+        <path d="m11 14 10-5.5M11 18l10 5.5"/>
+      </svg>
+    </button>
+    <button class="comment" type="button" aria-label="Comment">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 6h22v16H12l-7 6V6Z"/>
+      </svg>
+    </button>
+    <button class="more" type="button" aria-label="More">
+      <svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
+        <circle cx="16" cy="7" r="2.4"/>
+        <circle cx="16" cy="16" r="2.4"/>
+        <circle cx="16" cy="25" r="2.4"/>
+      </svg>
+    </button>
+  </aside>
+</body>
+</html>

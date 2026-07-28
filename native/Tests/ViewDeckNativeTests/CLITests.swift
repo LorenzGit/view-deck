@@ -11,6 +11,10 @@ final class CLITests: XCTestCase {
             "--path", "/play",
             "--device", "iphone-16-pro",
             "--orientation", "landscape",
+            "--left", "/tmp/left.html",
+            "--left-width", "118",
+            "--right", "/tmp/right.html",
+            "--right-width", "120",
             "--wait-for", "canvas",
             "--prepare-js", "window.testMode = true",
             "--output", "/tmp/game.png",
@@ -27,6 +31,10 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(invocation.route, "/play")
         XCTAssertEqual(invocation.deviceID, "iphone-16-pro")
         XCTAssertTrue(invocation.landscape)
+        XCTAssertEqual(invocation.leftFile?.path, "/tmp/left.html")
+        XCTAssertEqual(invocation.leftWidth, 118)
+        XCTAssertEqual(invocation.rightFile?.path, "/tmp/right.html")
+        XCTAssertEqual(invocation.rightWidth, 120)
         XCTAssertEqual(invocation.waitSelector, "canvas")
         XCTAssertEqual(invocation.prepareJavaScript, "window.testMode = true")
         XCTAssertEqual(invocation.screenshotOutput?.path, "/tmp/game.png")

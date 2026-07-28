@@ -108,8 +108,13 @@ struct QALayerConfiguration: Codable, Equatable {
     var sourcePath: String?
     var baseURL: String?
     var heightCSSPixels: Double
+    var widthCSSPixels: Double? = nil
     var html: String?
     var htmlSHA256: String?
+
+    var reservedExtentCSSPixels: Double {
+        kind.isSide ? (widthCSSPixels ?? heightCSSPixels) : heightCSSPixels
+    }
 
     init(
         kind: HTMLLayerKind,
@@ -126,7 +131,13 @@ struct QALayerConfiguration: Codable, Equatable {
         self.name = name
         self.sourcePath = sourcePath
         self.baseURL = baseURL?.absoluteString
-        heightCSSPixels = html == nil ? 0 : height
+        if kind.isSide {
+            heightCSSPixels = 0
+            widthCSSPixels = html == nil ? 0 : height
+        } else {
+            heightCSSPixels = html == nil ? 0 : height
+            widthCSSPixels = nil
+        }
         self.html = html
         htmlSHA256 = html.map {
             SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -169,6 +180,8 @@ struct QADeviceConfiguration: Codable, Equatable {
     var safari: QASafariConfiguration
     var header: QALayerConfiguration
     var footer: QALayerConfiguration
+    var left: QALayerConfiguration? = nil
+    var right: QALayerConfiguration? = nil
 }
 
 struct QATargetHint: Codable, Equatable {
@@ -1162,7 +1175,9 @@ extension QADeviceConfiguration {
         showSafeArea: Bool,
         applySafeAreaToPage: Bool,
         header: QALayerConfiguration,
-        footer: QALayerConfiguration
+        footer: QALayerConfiguration,
+        left: QALayerConfiguration? = nil,
+        right: QALayerConfiguration? = nil
     ) -> QADeviceConfiguration {
         let screen = CGSize(
             width: landscape ? profile.viewport.height : profile.viewport.width,
@@ -1172,7 +1187,9 @@ extension QADeviceConfiguration {
             device: profile,
             landscape: landscape,
             headerHeight: header.enabled ? CGFloat(header.heightCSSPixels) : 0,
-            footerHeight: footer.enabled ? CGFloat(footer.heightCSSPixels) : 0
+            footerHeight: footer.enabled ? CGFloat(footer.heightCSSPixels) : 0,
+            leftWidth: left?.enabled == true ? CGFloat(left?.reservedExtentCSSPixels ?? 0) : 0,
+            rightWidth: right?.enabled == true ? CGFloat(right?.reservedExtentCSSPixels ?? 0) : 0
         )
         let orientedSafe = SafeAreaGeometry.oriented(
             profile.safeArea,
@@ -1230,14 +1247,18 @@ extension QADeviceConfiguration {
                 bottomChromeCSSPixels: bottomChrome
             ),
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
     }
 
     static func capture(
         preview: DevicePreviewView,
         header: QALayerConfiguration,
-        footer: QALayerConfiguration
+        footer: QALayerConfiguration,
+        left: QALayerConfiguration? = nil,
+        right: QALayerConfiguration? = nil
     ) -> QADeviceConfiguration {
         let device = preview.profile
         let screen = preview.logicalViewportSize
@@ -1292,7 +1313,9 @@ extension QADeviceConfiguration {
                 bottomChromeCSSPixels: bottomChrome
             ),
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
     }
 }

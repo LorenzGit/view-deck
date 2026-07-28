@@ -226,6 +226,20 @@ final class QAScenarioTests: XCTestCase {
             sourcePath: nil,
             baseURL: nil
         )
+        let left = QALayerConfiguration(
+            kind: .left,
+            html: "<nav>Browse</nav>",
+            height: 118,
+            sourcePath: nil,
+            baseURL: nil
+        )
+        let right = QALayerConfiguration(
+            kind: .right,
+            html: "<aside>Actions</aside>",
+            height: 118,
+            sourcePath: nil,
+            baseURL: nil
+        )
         let preview = DevicePreviewView(profile: profile)
         preview.landscape = true
         preview.showSafeArea = true
@@ -234,11 +248,17 @@ final class QAScenarioTests: XCTestCase {
         preview.headerHeight = 48
         preview.footerHTML = footer.html
         preview.footerHeight = 56
+        preview.leftHTML = left.html
+        preview.leftWidth = 118
+        preview.rightHTML = right.html
+        preview.rightWidth = 118
 
         let captured = QADeviceConfiguration.capture(
             preview: preview,
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
         let generated = QADeviceConfiguration.template(
             profile: profile,
@@ -246,10 +266,17 @@ final class QAScenarioTests: XCTestCase {
             showSafeArea: true,
             applySafeAreaToPage: true,
             header: header,
-            footer: footer
+            footer: footer,
+            left: left,
+            right: right
         )
 
         XCTAssertEqual(generated, captured)
+        XCTAssertEqual(generated.resolution.pageContentCSS.width, 720)
+        XCTAssertEqual(generated.left?.kind, .left)
+        XCTAssertEqual(generated.left?.widthCSSPixels, 118)
+        XCTAssertEqual(generated.right?.kind, .right)
+        XCTAssertEqual(generated.right?.widthCSSPixels, 118)
     }
 
     func testDerivesClicksAndSwipesWithGestureIntervals() throws {

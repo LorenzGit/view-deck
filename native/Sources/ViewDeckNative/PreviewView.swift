@@ -189,6 +189,24 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     var footerHeight: CGFloat = 56 {
         didSet { needsLayout = true }
     }
+    var leftHTML: String? {
+        didSet { updateLayerWebViews(); needsLayout = true }
+    }
+    var leftBaseURL: URL? {
+        didSet { if leftHTML != nil { updateLayerWebViews() } }
+    }
+    var rightHTML: String? {
+        didSet { updateLayerWebViews(); needsLayout = true }
+    }
+    var rightBaseURL: URL? {
+        didSet { if rightHTML != nil { updateLayerWebViews() } }
+    }
+    var leftWidth: CGFloat = 118 {
+        didSet { needsLayout = true }
+    }
+    var rightWidth: CGFloat = 118 {
+        didSet { needsLayout = true }
+    }
 
     private(set) var currentURL: URL?
     private weak var canvas: PreviewCanvasView?
@@ -204,6 +222,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private let webView: WKWebView
     private var headerWebView: WKWebView?
     private var footerWebView: WKWebView?
+    private var leftWebView: WKWebView?
+    private var rightWebView: WKWebView?
     private var navigationGeneration = 0
     private var environmentUpdateGeneration = 0
 
@@ -293,7 +313,9 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             device: profile,
             landscape: landscape,
             headerHeight: headerHTML == nil ? 0 : headerHeight,
-            footerHeight: footerHTML == nil ? 0 : footerHeight
+            footerHeight: footerHTML == nil ? 0 : footerHeight,
+            leftWidth: leftHTML == nil ? 0 : leftWidth,
+            rightWidth: rightHTML == nil ? 0 : rightWidth
         )
     }
 
@@ -569,7 +591,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
 
         let viewportFrame = captureBounds
-        let sources = [headerWebView, webView, footerWebView].compactMap { $0 }
+        let sources = [leftWebView, headerWebView, webView, footerWebView, rightWebView].compactMap { $0 }
         guard !sources.isEmpty else {
             completion(.success(baseImage))
             return
@@ -691,41 +713,80 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             : 0
         let activeHeaderHeight = headerHTML == nil ? 0 : headerHeight
         let activeFooterHeight = footerHTML == nil ? 0 : footerHeight
+        let sideWidths = PreviewMetrics.sideLayerWidths(
+            viewportWidth: viewportSize.width,
+            landscape: landscape,
+            leftWidth: leftHTML == nil ? 0 : leftWidth,
+            rightWidth: rightHTML == nil ? 0 : rightWidth
+        )
+        let contentX = sideWidths.left
+        let contentWidth = max(1, viewportSize.width - sideWidths.left - sideWidths.right)
+        let headerTopInset = PreviewMetrics.headerTopInset(
+            device: profile,
+            landscape: landscape,
+            headerHeight: activeHeaderHeight
+        )
         let pageHeight = max(
             1,
-            viewportSize.height - topChrome - bottomChrome - activeHeaderHeight - activeFooterHeight
+            viewportSize.height
+                - topChrome
+                - bottomChrome
+                - headerTopInset
+                - activeHeaderHeight
+                - activeFooterHeight
         )
 
         safariTop.isHidden = !profile.safariChrome
         safariBottom.isHidden = !profile.safariChrome
         safariTop.compact = landscape
         safariBottom.compact = landscape
-        safariTop.frame = CGRect(x: 0, y: 0, width: viewportSize.width, height: topChrome)
-        safariBottom.frame = SafariChromeMetrics.bottomFrame(
+        safariTop.frame = CGRect(x: contentX, y: 0, width: contentWidth, height: topChrome)
+        var safariBottomFrame = SafariChromeMetrics.bottomFrame(
             viewportSize: viewportSize,
             chromeHeight: bottomChrome
         )
+        safariBottomFrame.origin.x = contentX
+        safariBottomFrame.size.width = contentWidth
+        safariBottom.frame = safariBottomFrame
         appStatusBar.isHidden = profile.platform != .iOS || profile.safariChrome || landscape
         appStatusBar.frame = CGRect(
-            x: 0,
+            x: contentX,
             y: 0,
-            width: viewportSize.width,
+            width: contentWidth,
             height: appStatusBar.isHidden ? 0 : appStatusBarHeight
         )
 
-        var pageY = topChrome
+        var pageY = topChrome + headerTopInset
         let trailingOverscan = profile.mobile ? Self.mobileTrailingOverscan : 0
         let bottomOverscan = isModernIOSApp ? Self.mobileBottomOverscan : 0
+        if let leftWebView {
+            leftWebView.isHidden = sideWidths.left == 0
+            leftWebView.frame = CGRect(
+                x: 0,
+                y: 0,
+                width: sideWidths.left,
+                height: viewportSize.height + bottomOverscan
+            )
+        }
+        if let rightWebView {
+            rightWebView.isHidden = sideWidths.right == 0
+            rightWebView.frame = CGRect(
+                x: viewportSize.width - sideWidths.right,
+                y: 0,
+                width: sideWidths.right + trailingOverscan,
+                height: viewportSize.height + bottomOverscan
+            )
+        }
         if let headerWebView {
             headerWebView.frame = CGRect(
-                x: 0,
+                x: contentX,
                 y: pageY,
-                width: viewportSize.width + trailingOverscan,
+                width: contentWidth + trailingOverscan,
                 height: activeHeaderHeight
             )
             pageY += activeHeaderHeight
         }
-        let pageFrame = CGRect(x: 0, y: pageY, width: viewportSize.width, height: pageHeight)
+        let pageFrame = CGRect(x: contentX, y: pageY, width: contentWidth, height: pageHeight)
         webView.frame = CGRect(
             x: pageFrame.minX,
             y: pageFrame.minY,
@@ -735,15 +796,15 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         webView.bounds = CGRect(origin: .zero, size: webView.frame.size)
         let safeOverlayFrame = profile.safariChrome
             ? pageFrame
-            : CGRect(origin: .zero, size: viewportSize)
+            : CGRect(x: contentX, y: 0, width: contentWidth, height: viewportSize.height)
         safeOverlay.frame = safeOverlayFrame
         safeOverlay.bounds = CGRect(origin: .zero, size: safeOverlayFrame.size)
         pageY += pageHeight
         if let footerWebView {
             footerWebView.frame = CGRect(
-                x: 0,
+                x: contentX,
                 y: pageY,
-                width: viewportSize.width + trailingOverscan,
+                width: contentWidth + trailingOverscan,
                 height: activeFooterHeight + bottomOverscan
             )
         }
@@ -920,6 +981,20 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         } else {
             footerWebView?.removeFromSuperview()
             footerWebView = nil
+        }
+        if let leftHTML {
+            if leftWebView == nil { leftWebView = makeLayerWebView() }
+            leftWebView?.loadHTMLString(leftHTML, baseURL: leftBaseURL)
+        } else {
+            leftWebView?.removeFromSuperview()
+            leftWebView = nil
+        }
+        if let rightHTML {
+            if rightWebView == nil { rightWebView = makeLayerWebView() }
+            rightWebView?.loadHTMLString(rightHTML, baseURL: rightBaseURL)
+        } else {
+            rightWebView?.removeFromSuperview()
+            rightWebView = nil
         }
         needsLayout = true
         canvas?.needsLayout = true

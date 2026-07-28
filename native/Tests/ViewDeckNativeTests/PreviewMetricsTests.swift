@@ -48,6 +48,45 @@ final class PreviewMetricsTests: XCTestCase {
         )
     }
 
+    func testLandscapeSideRailsReserveWidthOnlyWhenRotated() {
+        let device = BuiltinDevices.all[0]
+
+        XCTAssertEqual(
+            PreviewMetrics.contentSize(
+                device: device,
+                landscape: true,
+                headerHeight: 0,
+                footerHeight: 0,
+                leftWidth: 118,
+                rightWidth: 118
+            ),
+            CGSize(width: 720, height: 316)
+        )
+        XCTAssertEqual(
+            PreviewMetrics.contentSize(
+                device: device,
+                landscape: false,
+                headerHeight: 0,
+                footerHeight: 0,
+                leftWidth: 118,
+                rightWidth: 118
+            ),
+            CGSize(width: 440, height: 766)
+        )
+    }
+
+    func testLandscapeSideRailsLeaveAtLeastOnePagePixel() {
+        let widths = PreviewMetrics.sideLayerWidths(
+            viewportWidth: 320,
+            landscape: true,
+            leftWidth: 400,
+            rightWidth: 400
+        )
+
+        XCTAssertEqual(widths.left, 319)
+        XCTAssertEqual(widths.right, 0)
+    }
+
     func testSafariBottomChromeOverlapsTheContentSeam() {
         XCTAssertEqual(
             SafariChromeMetrics.bottomFrame(
@@ -71,13 +110,17 @@ final class PreviewMetricsTests: XCTestCase {
         XCTAssertFalse(device.safariChrome)
     }
 
-    func testIPhoneAppContentRemainsFullBleedBehindStatusBar() throws {
+    func testIPhoneAppHeaderStartsBelowStatusBar() throws {
         let device = try XCTUnwrap(BuiltinDevices.all.first { $0.id == "iphone-17-pro-max" })
 
         XCTAssertEqual(PreviewMetrics.appStatusBarHeight(device: device, landscape: false), 62)
         XCTAssertEqual(
+            PreviewMetrics.headerTopInset(device: device, landscape: false, headerHeight: 48),
+            62
+        )
+        XCTAssertEqual(
             PreviewMetrics.contentSize(device: device, landscape: false, headerHeight: 48, footerHeight: 56),
-            CGSize(width: 440, height: 852)
+            CGSize(width: 440, height: 790)
         )
     }
 
