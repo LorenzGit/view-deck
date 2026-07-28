@@ -68,7 +68,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var rightPath: URL?
     private let sidebarInitialWidth: CGFloat = 230
     private let inspectorInitialWidth: CGFloat = 320
-    private let sidebarMinimumWidth: CGFloat = 180
+    private let sidebarMinimumWidth: CGFloat = 220
     private let inspectorMinimumWidth: CGFloat = 260
     private let centerMinimumWidth: CGFloat = 520
     private var restoringSplitPositions = false
@@ -295,7 +295,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             quickActions.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
             quickActions.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
             quickActions.bottomAnchor.constraint(equalTo: projectButton.topAnchor, constant: -8),
-            quickActions.heightAnchor.constraint(equalToConstant: 80),
+            quickActions.heightAnchor.constraint(equalToConstant: 228),
             projectButton.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
             projectButton.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
             projectButton.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -12),

@@ -103,15 +103,22 @@ final class LivePreviewVideoRecorder {
     private let framesPerSecond: Int
     private let captureScale: CGFloat
     private let overwrite: Bool
+    private let encodingQueue = DispatchQueue(
+        label: "studio.viewdeck.live-video-encoding",
+        qos: .userInitiated
+    )
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
-    private var frameIndex = 0
+    private var scheduledFrameNumber = 0
+    private var writtenFrameCount = 0
+    private var droppedFrameCount = 0
     private var recordStartedAt: Date?
     private weak var preview: DevicePreviewView?
     private var completion: ((Result<Void, Error>) -> Void)?
     private var stopRequested = false
     private var isFinishing = false
+    private var captureInFlight = false
 
     private var frameCount: Int? {
         duration.map { max(1, Int(($0 * Double(framesPerSecond)).rounded())) }
@@ -126,7 +133,7 @@ final class LivePreviewVideoRecorder {
     ) {
         self.outputURL = outputURL
         self.duration = duration
-        self.framesPerSecond = framesPerSecond
+        self.framesPerSecond = max(1, framesPerSecond)
         self.captureScale = captureScale
         self.overwrite = overwrite
     }
@@ -146,7 +153,7 @@ final class LivePreviewVideoRecorder {
 
     func stop() {
         stopRequested = true
-        if frameIndex > 0, !isFinishing {
+        if writtenFrameCount > 0, !captureInFlight, !isFinishing {
             finish()
         }
     }
@@ -154,7 +161,7 @@ final class LivePreviewVideoRecorder {
     private func scheduleNextFrame() {
         guard !isFinishing, let preview else { return }
         let start = recordStartedAt ?? Date()
-        let target = start.addingTimeInterval(Double(frameIndex) / Double(framesPerSecond))
+        let target = start.addingTimeInterval(Double(scheduledFrameNumber) / Double(framesPerSecond))
         let delay = max(0, target.timeIntervalSinceNow)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak preview] in
             guard let self, let preview, !self.isFinishing else { return }
@@ -163,24 +170,58 @@ final class LivePreviewVideoRecorder {
     }
 
     private func captureNextFrame(preview: DevicePreviewView) {
+        captureInFlight = true
+        let frameNumber = scheduledFrameNumber
         preview.captureVideoFrame(scale: captureScale) { [weak self] result in
             guard let self, !self.isFinishing else { return }
-            do {
-                let image = try result.get()
-                if self.writer == nil {
-                    try self.prepareWriter(for: image)
+            switch result {
+            case .failure(let error):
+                self.captureInFlight = false
+                self.fail(error)
+            case .success(let image):
+                self.encodingQueue.async { [weak self] in
+                    guard let self else { return }
+                    do {
+                        if self.writer == nil {
+                            try self.prepareWriter(for: image)
+                        }
+                        let appended = try self.append(image: image, at: frameNumber)
+                        DispatchQueue.main.async { [weak self] in
+                            self?.didProcessFrame(frameNumber, appended: appended)
+                        }
+                    } catch {
+                        DispatchQueue.main.async { [weak self] in
+                            self?.captureInFlight = false
+                            self?.fail(error)
+                        }
+                    }
                 }
-                try self.append(image: image, at: self.frameIndex)
-                self.frameIndex += 1
-                if self.stopRequested || self.frameCount.map({ self.frameIndex >= $0 }) == true {
-                    self.finish()
-                } else {
-                    self.scheduleNextFrame()
-                }
-            } catch {
-                self.writer?.cancelWriting()
-                self.complete(.failure(error))
             }
+        }
+    }
+
+    private func didProcessFrame(_ frameNumber: Int, appended: Bool) {
+        guard !isFinishing else { return }
+        captureInFlight = false
+        if appended {
+            writtenFrameCount += 1
+        } else {
+            droppedFrameCount += 1
+        }
+
+        let elapsed = max(0, Date().timeIntervalSince(recordStartedAt ?? Date()))
+        let nextFrameNumber = LiveVideoFramePacing.nextFrameNumber(
+            after: frameNumber,
+            elapsed: elapsed,
+            framesPerSecond: framesPerSecond
+        )
+        droppedFrameCount += max(0, nextFrameNumber - frameNumber - 1)
+        scheduledFrameNumber = nextFrameNumber
+
+        if stopRequested || frameCount.map({ nextFrameNumber >= $0 }) == true {
+            finish()
+        } else {
+            scheduleNextFrame()
         }
     }
 
@@ -226,12 +267,12 @@ final class LivePreviewVideoRecorder {
         self.adaptor = adaptor
     }
 
-    private func append(image: NSImage, at index: Int) throws {
+    private func append(image: NSImage, at frameNumber: Int) throws -> Bool {
         guard let input, let adaptor, let pool = adaptor.pixelBufferPool else {
             throw PreviewMediaError.videoEncoding("The video pixel-buffer pool is unavailable.")
         }
         guard input.isReadyForMoreMediaData else {
-            throw PreviewMediaError.videoEncoding("The H.264 encoder did not accept the next frame.")
+            return false
         }
         var optionalBuffer: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &optionalBuffer)
@@ -239,36 +280,50 @@ final class LivePreviewVideoRecorder {
             throw PreviewMediaError.videoEncoding("Could not allocate a video frame.")
         }
         try PreviewImageEncoding.draw(image, into: buffer)
-        let timestamp: CMTime
-        if duration == nil {
-            let elapsed = max(0, Date().timeIntervalSince(recordStartedAt ?? Date()))
-            timestamp = CMTime(seconds: elapsed, preferredTimescale: 600)
-        } else {
-            timestamp = CMTime(value: CMTimeValue(index), timescale: CMTimeScale(framesPerSecond))
-        }
+        let timestamp = LiveVideoFramePacing.presentationTime(
+            frameNumber: frameNumber,
+            framesPerSecond: framesPerSecond
+        )
         guard adaptor.append(buffer, withPresentationTime: timestamp) else {
             throw writer?.error ?? PreviewMediaError.videoEncoding("Could not append a video frame.")
         }
+        return true
     }
 
     private func finish() {
         guard !isFinishing else { return }
         isFinishing = true
-        guard let writer, let input else {
+        guard writtenFrameCount > 0, let writer, let input else {
+            encodingQueue.async { [weak self] in
+                self?.writer?.cancelWriting()
+            }
             complete(.failure(PreviewMediaError.videoEncoding("No video frames were captured.")))
             return
         }
-        input.markAsFinished()
-        writer.finishWriting { [weak self] in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                if writer.status == .completed {
-                    self.complete(.success(()))
-                } else {
-                    self.complete(.failure(
-                        writer.error ?? PreviewMediaError.videoEncoding("The MP4 writer did not finish.")
-                    ))
+        encodingQueue.async { [weak self] in
+            input.markAsFinished()
+            writer.finishWriting { [weak self] in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    if writer.status == .completed {
+                        self.complete(.success(()))
+                    } else {
+                        self.complete(.failure(
+                            writer.error ?? PreviewMediaError.videoEncoding("The MP4 writer did not finish.")
+                        ))
+                    }
                 }
+            }
+        }
+    }
+
+    private func fail(_ error: Error) {
+        guard !isFinishing else { return }
+        isFinishing = true
+        encodingQueue.async { [weak self] in
+            self?.writer?.cancelWriting()
+            DispatchQueue.main.async { [weak self] in
+                self?.complete(.failure(error))
             }
         }
     }
@@ -281,5 +336,24 @@ final class LivePreviewVideoRecorder {
 
     private static func even(_ value: Int) -> Int {
         max(2, value.isMultiple(of: 2) ? value : value + 1)
+    }
+}
+
+enum LiveVideoFramePacing {
+    static func nextFrameNumber(
+        after frameNumber: Int,
+        elapsed: TimeInterval,
+        framesPerSecond: Int
+    ) -> Int {
+        let framesPerSecond = max(1, framesPerSecond)
+        let firstFutureFrame = Int(ceil(max(0, elapsed) * Double(framesPerSecond)))
+        return max(frameNumber + 1, firstFutureFrame)
+    }
+
+    static func presentationTime(frameNumber: Int, framesPerSecond: Int) -> CMTime {
+        CMTime(
+            value: CMTimeValue(max(0, frameNumber)),
+            timescale: CMTimeScale(max(1, framesPerSecond))
+        )
     }
 }

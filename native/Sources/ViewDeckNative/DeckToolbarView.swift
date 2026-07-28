@@ -100,70 +100,142 @@ struct DeckQuickActionsView: View {
     @ObservedObject var model: DeckToolbarModel
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                iconButton(
+        VStack(spacing: 7) {
+            HStack(spacing: 8) {
+                Text("TEST TOOLS")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .tracking(0.7)
+                    .foregroundStyle(ToolbarPalette.muted)
+                Spacer(minLength: 0)
+                activityStatus
+            }
+
+            HStack(spacing: 5) {
+                actionButton(
                     "arrow.triangle.2.circlepath",
+                    title: "Rotate",
                     help: "Rotate device",
                     action: model.rotate
                 )
                 screenshotButton
-                iconButton(
+                actionButton(
                     "wrench.and.screwdriver",
+                    title: "Inspect",
                     help: "Open Web Inspector",
                     action: model.openDeveloperTools
                 )
-                Spacer(minLength: 0)
             }
 
-            HStack(spacing: 5) {
-                qaControls
-                Spacer(minLength: 0)
-                recordVideoToggle
-            }
+            Rectangle()
+                .fill(ToolbarPalette.line)
+                .frame(height: 1)
+
+            recordVideoToggle
+            actionRecordingButton
+            scenarioControls
         }
-        .padding(5)
-        .frame(height: 80)
-        .background(ToolbarPalette.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(ToolbarPalette.line))
+        .padding(9)
+        .frame(height: 228)
+        .background(ToolbarPalette.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(ToolbarPalette.line))
         .environment(\.colorScheme, .dark)
     }
 
+    private var activityStatus: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(activityColor)
+                .frame(width: 5, height: 5)
+                .shadow(color: activityColor.opacity(0.5), radius: 3)
+            Text(activityTitle)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(activityColor)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 18)
+        .background(activityColor.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(activityColor.opacity(0.18)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(activityTitle)
+    }
+
+    private var activityTitle: String {
+        if model.isQARecording { return "RECORDING ACTIONS" }
+        if model.isQAReplaying { return "REPLAYING" }
+        return "READY"
+    }
+
+    private var activityColor: Color {
+        if model.isQARecording { return .red }
+        if model.isQAReplaying { return ToolbarPalette.accent }
+        return ToolbarPalette.secondary
+    }
+
     private var recordVideoToggle: some View {
-        VStack(spacing: 0) {
-            Text("Record Video")
-                .font(.system(size: 8.5, weight: .medium))
-                .foregroundStyle(ToolbarPalette.secondary)
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityHidden(true)
+        HStack(spacing: 8) {
+            Image(systemName: model.recordQAVideo ? "video.fill" : "video")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(model.recordQAVideo ? ToolbarPalette.accent : ToolbarPalette.muted)
+                .frame(width: 22, height: 22)
+                .background(
+                    (model.recordQAVideo ? ToolbarPalette.accent.opacity(0.12) : Color.white.opacity(0.025)),
+                    in: RoundedRectangle(cornerRadius: 6)
+                )
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Video capture")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(ToolbarPalette.text)
+                    .lineLimit(1)
+                Text("MP4 · 30 FPS")
+                    .font(.system(size: 7.5, weight: .medium))
+                    .foregroundStyle(ToolbarPalette.muted)
+                    .lineLimit(1)
+            }
+            .accessibilityHidden(true)
+
+            Spacer(minLength: 2)
+
             Toggle("", isOn: $model.recordQAVideo)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .accessibilityLabel("Record Video")
+                .accessibilityLabel("Include video capture")
         }
-        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 7)
+        .frame(height: 38)
+        .background(
+            model.recordQAVideo ? ToolbarPalette.accent.opacity(0.055) : Color.white.opacity(0.018),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(model.recordQAVideo ? ToolbarPalette.accent.opacity(0.22) : ToolbarPalette.line)
+        )
         .disabled(model.isQARecording || model.isQAReplaying)
-        .help("Save an MP4 alongside the recorded QA scenario")
+        .opacity(model.isQARecording || model.isQAReplaying ? 0.68 : 1)
+        .help("Include a performance-optimized 30 FPS MP4 with the actions recording")
     }
 
     private var screenshotButton: some View {
         Button(action: model.captureScreenshot) {
-            Group {
+            VStack(spacing: 2) {
                 if model.isCapturingScreenshot {
                     ProgressView()
-                        .controlSize(.small)
-                        .tint(ToolbarPalette.accent)
+                        .controlSize(.mini)
+                        .tint(ToolbarPalette.secondary)
                 } else {
                     Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ToolbarPalette.accent)
+                        .font(.system(size: 10.5, weight: .semibold))
                 }
+                Text("Markup")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .lineLimit(1)
             }
-            .frame(width: 32, height: 32)
-            .background(ToolbarPalette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.accent.opacity(0.28)))
+            .foregroundStyle(ToolbarPalette.secondary)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
         }
         .buttonStyle(DeckToolbarButtonStyle())
         .disabled(model.isCapturingScreenshot)
@@ -171,82 +243,146 @@ struct DeckQuickActionsView: View {
         .accessibilityLabel(model.isCapturingScreenshot ? "Capturing device" : "Capture and mark up device")
     }
 
-    private var qaControls: some View {
-        HStack(spacing: 2) {
-            Button(action: model.toggleQARecording) {
-                Image(systemName: model.isQARecording ? "stop.fill" : "record.circle")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(model.isQARecording ? Color.white : Color.red)
-                    .frame(width: 29, height: 28)
+    private var actionRecordingButton: some View {
+        Button(action: model.toggleQARecording) {
+            HStack(spacing: 7) {
+                Image(systemName: model.isQARecording ? "stop.fill" : "cursorarrow.click.2")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(model.isQARecording ? "Stop & save" : "Record actions")
+                        .font(.system(size: 9, weight: .bold))
+                        .lineLimit(1)
+                    Text(model.isQARecording ? "Finish actions JSON" : "Clicks, keys & forms")
+                        .font(.system(size: 7.5, weight: .medium))
+                        .foregroundStyle(model.isQARecording ? Color.white.opacity(0.78) : Color.red.opacity(0.72))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 2)
+
+                Text("JSON")
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .frame(height: 18)
                     .background(
-                        (model.isQARecording ? Color.red : Color.red.opacity(0.08)),
-                        in: RoundedRectangle(cornerRadius: 7)
+                        model.isQARecording ? Color.white.opacity(0.16) : Color.red.opacity(0.10),
+                        in: Capsule()
                     )
             }
-            .buttonStyle(DeckToolbarButtonStyle())
-            .disabled(model.isQAReplaying)
-            .help(recordButtonHelp)
-            .accessibilityLabel(model.isQARecording ? "Stop QA recording" : "Start QA recording")
+            .foregroundStyle(model.isQARecording ? Color.white : Color.red)
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background(
+                model.isQARecording ? Color.red : Color.red.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(model.isQARecording ? Color.red : Color.red.opacity(0.22))
+            )
+        }
+        .buttonStyle(DeckToolbarButtonStyle())
+        .disabled(model.isQAReplaying)
+        .help(recordButtonHelp)
+        .accessibilityLabel(
+            model.isQARecording ? "Stop and save actions JSON" : "Record actions to JSON"
+        )
+    }
 
+    private var scenarioControls: some View {
+        HStack(spacing: 5) {
             Button(action: model.addQACheckpoint) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "bookmark.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                    if model.qaCheckpointCount > 0 {
-                        Text("\(model.qaCheckpointCount)")
-                            .font(.system(size: 7, weight: .bold))
-                            .padding(2)
-                            .background(ToolbarPalette.accent, in: Circle())
-                            .foregroundStyle(Color.black)
-                            .offset(x: 5, y: -5)
+                HStack(spacing: 4) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 9.5, weight: .semibold))
+                        if model.qaCheckpointCount > 0 {
+                            Text("\(model.qaCheckpointCount)")
+                                .font(.system(size: 6.5, weight: .bold))
+                                .padding(2)
+                                .background(ToolbarPalette.accent, in: Circle())
+                                .foregroundStyle(Color.black)
+                                .offset(x: 5, y: -5)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Screenshot")
+                            .font(.system(size: 8, weight: .semibold))
+                            .lineLimit(1)
+                        Text("Local PNG")
+                            .font(.system(size: 6.8, weight: .medium))
+                            .foregroundStyle(
+                                model.isQARecording
+                                    ? ToolbarPalette.accent.opacity(0.72)
+                                    : ToolbarPalette.muted.opacity(0.72)
+                            )
+                            .lineLimit(1)
                     }
                 }
                 .foregroundStyle(model.isQARecording ? ToolbarPalette.accent : ToolbarPalette.muted)
-                .frame(width: 29, height: 28)
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(Color.white.opacity(0.022), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
             }
             .buttonStyle(DeckToolbarButtonStyle())
             .disabled(!model.isQARecording)
-            .help("Capture a named QA checkpoint screenshot")
-            .accessibilityLabel("Add QA checkpoint")
+            .help("Save a checkpoint PNG beside the actions JSON")
+            .accessibilityLabel("Save checkpoint screenshot locally as PNG")
 
             Button(action: model.isQAReplaying ? model.stopQAReplay : model.replayQAScenario) {
-                Image(systemName: model.isQAReplaying ? "stop.fill" : "play.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(model.isQAReplaying ? Color.white : ToolbarPalette.secondary)
-                .frame(width: 29, height: 28)
+                HStack(spacing: 4) {
+                    Image(systemName: model.isQAReplaying ? "stop.fill" : "play.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(model.isQAReplaying ? "Stop" : "Replay")
+                        .font(.system(size: 8, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(model.isQAReplaying ? Color.black : ToolbarPalette.secondary)
+                .frame(maxWidth: .infinity, minHeight: 38)
                 .background(
-                    model.isQAReplaying ? Color.red : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7)
+                    model.isQAReplaying ? ToolbarPalette.accent : Color.white.opacity(0.022),
+                    in: RoundedRectangle(cornerRadius: 8)
                 )
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(
+                    model.isQAReplaying ? ToolbarPalette.accent : ToolbarPalette.line
+                ))
             }
             .buttonStyle(DeckToolbarButtonStyle())
             .disabled(model.isQARecording)
             .help(model.isQAReplaying ? "Stop QA replay" : "Replay a .viewdeck.json scenario")
             .accessibilityLabel(model.isQAReplaying ? "Stop QA replay" : "Replay QA scenario")
         }
-        .padding(.horizontal, 2)
-        .frame(height: 32)
-        .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
     }
 
     private var recordButtonHelp: String {
         if model.isQARecording {
-            return "Stop and save QA recording"
+            return "Stop and save the recorded actions JSON"
         }
         return model.recordQAVideo
-            ? "Record input, checkpoints, and video"
-            : "Record input and checkpoints"
+            ? "Record actions to JSON and include an MP4 video"
+            : "Record actions to JSON"
     }
 
-    private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func actionButton(
+        _ symbol: String,
+        title: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(ToolbarPalette.secondary)
-                .frame(width: 32, height: 32)
-                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
+            VStack(spacing: 2) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(ToolbarPalette.secondary)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
         }
         .buttonStyle(DeckToolbarButtonStyle())
         .help(help)

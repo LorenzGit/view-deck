@@ -123,6 +123,11 @@ enum PreviewNavigationPolicy {
 }
 
 final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
+    private static let videoFrameCaptureQueue = DispatchQueue(
+        label: "studio.viewdeck.video-frame-capture",
+        qos: .userInitiated
+    )
+
     private static let mobileTrailingOverscan: CGFloat = 4
     private static let mobileBottomOverscan: CGFloat = 4
 
@@ -523,17 +528,6 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             return
         }
 
-        let options: CGWindowImageOption = [.boundsIgnoreFraming, .bestResolution]
-        guard let windowImage = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            CGWindowID(window.windowNumber),
-            options
-        ) else {
-            captureScreenshot(scale: captureScale, completion: completion)
-            return
-        }
-
         let frameInWindow = viewportClip.convert(captureBounds, to: nil)
         let frameOnScreen = window.convertToScreen(frameInWindow)
         let windowFrame = window.frame
@@ -541,35 +535,57 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             captureScreenshot(scale: captureScale, completion: completion)
             return
         }
-        let imageScaleX = CGFloat(windowImage.width) / windowFrame.width
-        let imageScaleY = CGFloat(windowImage.height) / windowFrame.height
-        let requestedCrop = CGRect(
-            x: (frameOnScreen.minX - windowFrame.minX) * imageScaleX,
-            y: (windowFrame.maxY - frameOnScreen.maxY) * imageScaleY,
-            width: frameOnScreen.width * imageScaleX,
-            height: frameOnScreen.height * imageScaleY
-        ).integral
-        let imageBounds = CGRect(
-            x: 0,
-            y: 0,
-            width: windowImage.width,
-            height: windowImage.height
-        )
-        let crop = requestedCrop.intersection(imageBounds)
+        let windowNumber = CGWindowID(window.windowNumber)
         let targetWidth = Int((captureBounds.width * captureScale).rounded())
         let targetHeight = Int((captureBounds.height * captureScale).rounded())
-        guard crop.width > 1,
-              crop.height > 1,
-              let cropped = windowImage.cropping(to: crop),
-              let image = PreviewImageEncoding.image(
-                  from: cropped,
-                  pixelsWide: targetWidth,
-                  pixelsHigh: targetHeight
-              ) else {
-            captureScreenshot(scale: captureScale, completion: completion)
-            return
+        let resolution: CGWindowImageOption = captureScale <= 1 ? .nominalResolution : .bestResolution
+
+        Self.videoFrameCaptureQueue.async {
+            let options: CGWindowImageOption = [.boundsIgnoreFraming, resolution]
+            guard let windowImage = CGWindowListCreateImage(
+                .null,
+                .optionIncludingWindow,
+                windowNumber,
+                options
+            ) else {
+                DispatchQueue.main.async {
+                    self.captureScreenshot(scale: captureScale, completion: completion)
+                }
+                return
+            }
+
+            let imageScaleX = CGFloat(windowImage.width) / windowFrame.width
+            let imageScaleY = CGFloat(windowImage.height) / windowFrame.height
+            let requestedCrop = CGRect(
+                x: (frameOnScreen.minX - windowFrame.minX) * imageScaleX,
+                y: (windowFrame.maxY - frameOnScreen.maxY) * imageScaleY,
+                width: frameOnScreen.width * imageScaleX,
+                height: frameOnScreen.height * imageScaleY
+            ).integral
+            let imageBounds = CGRect(
+                x: 0,
+                y: 0,
+                width: windowImage.width,
+                height: windowImage.height
+            )
+            let crop = requestedCrop.intersection(imageBounds)
+            guard crop.width > 1,
+                  crop.height > 1,
+                  let cropped = windowImage.cropping(to: crop),
+                  let image = PreviewImageEncoding.image(
+                      from: cropped,
+                      pixelsWide: targetWidth,
+                      pixelsHigh: targetHeight
+                  ) else {
+                DispatchQueue.main.async {
+                    self.captureScreenshot(scale: captureScale, completion: completion)
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                completion(.success(image))
+            }
         }
-        completion(.success(image))
     }
 
     func captureScreenshot(
