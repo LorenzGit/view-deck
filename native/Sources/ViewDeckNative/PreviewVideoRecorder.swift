@@ -97,12 +97,18 @@ enum PreviewImageEncoding {
     }
 }
 
+enum LivePreviewVideoFrameSource {
+    case windowCompositor
+    case webkitSnapshot
+}
+
 final class LivePreviewVideoRecorder {
     private let outputURL: URL
     private let duration: TimeInterval?
     private let framesPerSecond: Int
     private let captureScale: CGFloat
     private let overwrite: Bool
+    private let frameSource: LivePreviewVideoFrameSource
     private let encodingQueue = DispatchQueue(
         label: "studio.viewdeck.live-video-encoding",
         qos: .userInitiated
@@ -129,13 +135,15 @@ final class LivePreviewVideoRecorder {
         duration: TimeInterval?,
         framesPerSecond: Int,
         captureScale: CGFloat,
-        overwrite: Bool
+        overwrite: Bool,
+        frameSource: LivePreviewVideoFrameSource = .windowCompositor
     ) {
         self.outputURL = outputURL
         self.duration = duration
         self.framesPerSecond = max(1, framesPerSecond)
         self.captureScale = captureScale
         self.overwrite = overwrite
+        self.frameSource = frameSource
     }
 
     func record(
@@ -172,28 +180,38 @@ final class LivePreviewVideoRecorder {
     private func captureNextFrame(preview: DevicePreviewView) {
         captureInFlight = true
         let frameNumber = scheduledFrameNumber
-        preview.captureVideoFrame(scale: captureScale) { [weak self] result in
-            guard let self, !self.isFinishing else { return }
-            switch result {
-            case .failure(let error):
-                self.captureInFlight = false
-                self.fail(error)
-            case .success(let image):
-                self.encodingQueue.async { [weak self] in
-                    guard let self else { return }
-                    do {
-                        if self.writer == nil {
-                            try self.prepareWriter(for: image)
-                        }
-                        let appended = try self.append(image: image, at: frameNumber)
-                        DispatchQueue.main.async { [weak self] in
-                            self?.didProcessFrame(frameNumber, appended: appended)
-                        }
-                    } catch {
-                        DispatchQueue.main.async { [weak self] in
-                            self?.captureInFlight = false
-                            self?.fail(error)
-                        }
+        let completion: (Result<NSImage, Error>) -> Void = { [weak self] result in
+            self?.didCaptureFrame(result, frameNumber: frameNumber)
+        }
+        switch frameSource {
+        case .windowCompositor:
+            preview.captureVideoFrame(scale: captureScale, completion: completion)
+        case .webkitSnapshot:
+            preview.captureScreenshot(scale: captureScale, completion: completion)
+        }
+    }
+
+    private func didCaptureFrame(_ result: Result<NSImage, Error>, frameNumber: Int) {
+        guard !isFinishing else { return }
+        switch result {
+        case .failure(let error):
+            captureInFlight = false
+            fail(error)
+        case .success(let image):
+            encodingQueue.async { [weak self] in
+                guard let self else { return }
+                do {
+                    if self.writer == nil {
+                        try self.prepareWriter(for: image)
+                    }
+                    let appended = try self.append(image: image, at: frameNumber)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.didProcessFrame(frameNumber, appended: appended)
+                    }
+                } catch {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.captureInFlight = false
+                        self?.fail(error)
                     }
                 }
             }

@@ -22,6 +22,7 @@ final class CLITests: XCTestCase {
             "--video", "/tmp/game.mp4",
             "--duration", "4",
             "--fps", "12",
+            "--show-preview",
             "--json"
         ])
 
@@ -42,6 +43,7 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(invocation.videoOutput?.path, "/tmp/game.mp4")
         XCTAssertEqual(invocation.videoDuration, 4)
         XCTAssertEqual(invocation.videoFPS, 12)
+        XCTAssertTrue(invocation.showPreview)
         XCTAssertTrue(invocation.json)
     }
 
@@ -53,6 +55,42 @@ final class CLITests: XCTestCase {
 
         XCTAssertEqual(invocation.npmScript, "dev")
         XCTAssertEqual(invocation.videoFPS, 30)
+        XCTAssertFalse(invocation.showPreview)
+    }
+
+    func testHiddenPreviewOriginStaysOutsideEveryDisplay() {
+        let screens = [
+            CGRect(x: 0, y: 0, width: 1_440, height: 900),
+            CGRect(x: -1_920, y: -100, width: 1_920, height: 1_080),
+            CGRect(x: 1_440, y: 200, width: 2_560, height: 1_440)
+        ]
+        let size = CGSize(width: 430, height: 932)
+
+        let origin = CLIPreviewWindow.origin(
+            showPreview: false,
+            windowSize: size,
+            screenFrames: screens,
+            mainVisibleFrame: screens[0]
+        )
+        let windowFrame = CGRect(origin: origin, size: size)
+
+        XCTAssertEqual(windowFrame.maxX, -1_920 - CLIPreviewWindow.offscreenMargin)
+        XCTAssertFalse(screens.contains { $0.intersects(windowFrame) })
+    }
+
+    func testVisiblePreviewOriginAnchorsToMainDisplayBottomTrailingCorner() {
+        let visibleFrame = CGRect(x: 10, y: 40, width: 1_400, height: 830)
+        let size = CGSize(width: 430, height: 820)
+
+        let origin = CLIPreviewWindow.origin(
+            showPreview: true,
+            windowSize: size,
+            screenFrames: [visibleFrame],
+            mainVisibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(origin.x, visibleFrame.maxX - size.width)
+        XCTAssertEqual(origin.y, visibleFrame.minY)
     }
 
     func testCaptureRequiresPNGOutput() {

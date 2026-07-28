@@ -527,6 +527,11 @@ public enum ViewDeckCommand {
             "sources": ["url", "localFile", "npmScript", "customCommand"],
             "readiness": ["load", "cssSelector", "javaScript", "prepareJavaScript", "delay"],
             "artifacts": ["png", "mp4", "json"],
+            "preview": [
+                "defaultVisibility": "hidden",
+                "visibilityModes": ["hidden", "visible"],
+                "visibleFlag": "--show-preview"
+            ],
             "qa": [
                 "schemaVersion": 1,
                 "recording": ["pointer", "mouse", "keyboard", "form", "checkpoints", "video"],
@@ -609,6 +614,7 @@ struct CLIInvocation {
     var overwrite = false
     var failOnPageError = false
     var failOnIssues = false
+    var showPreview = false
     var scenarioInput: URL?
     var scenarioOutput: URL?
     var scenarioName: String?
@@ -749,6 +755,7 @@ struct CLIInvocation {
             case "--overwrite": value.overwrite = true
             case "--fail-on-page-error": value.failOnPageError = true
             case "--fail-on-issues": value.failOnIssues = true
+            case "--show-preview": value.showPreview = true
             case "--speed":
                 let speed = try requiredValue(for: argument)
                 if speed == "smart" {
@@ -882,6 +889,64 @@ struct CLIInvocation {
     }
 }
 
+enum CLIPreviewWindow {
+    static let offscreenMargin: CGFloat = 100
+
+    static func make(contentView: NSView, size: CGSize, showPreview: Bool) -> NSPanel {
+        let frame = CGRect(origin: .zero, size: size)
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = contentView
+        panel.setFrameOrigin(origin(
+            showPreview: showPreview,
+            windowSize: size,
+            screenFrames: NSScreen.screens.map(\.frame),
+            mainVisibleFrame: NSScreen.main?.visibleFrame
+        ))
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.stationary, .ignoresCycle]
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    static func origin(
+        showPreview: Bool,
+        windowSize: CGSize,
+        screenFrames: [CGRect],
+        mainVisibleFrame: CGRect?
+    ) -> CGPoint {
+        if showPreview, let visibleFrame = mainVisibleFrame {
+            return CGPoint(
+                x: visibleFrame.maxX - windowSize.width,
+                y: visibleFrame.minY
+            )
+        }
+
+        guard let firstScreen = screenFrames.first else {
+            return CGPoint(
+                x: -windowSize.width - offscreenMargin,
+                y: -windowSize.height - offscreenMargin
+            )
+        }
+        let desktopBounds = screenFrames.dropFirst().reduce(firstScreen) { bounds, screen in
+            bounds.union(screen)
+        }
+        return CGPoint(
+            x: desktopBounds.minX - windowSize.width - offscreenMargin,
+            y: desktopBounds.minY
+        )
+    }
+
+    static func intersectsDisplay(_ window: NSWindow) -> Bool {
+        NSScreen.screens.contains { $0.frame.intersects(window.frame) }
+    }
+}
+
 private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServerControllerDelegate {
     private let invocation: CLIInvocation
     private let completion: (Result<[String: Any], Error>) -> Void
@@ -993,24 +1058,11 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
         preview.frame = frame
         preview.bounds = frame
         preview.autoresizingMask = [.width, .height]
-        let hiddenWindow = NSPanel(
-            contentRect: frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+        window = CLIPreviewWindow.make(
+            contentView: preview,
+            size: size,
+            showPreview: invocation.showPreview
         )
-        hiddenWindow.contentView = preview
-        if let visibleFrame = NSScreen.main?.visibleFrame {
-            hiddenWindow.setFrameOrigin(CGPoint(
-                x: visibleFrame.maxX - size.width,
-                y: visibleFrame.minY
-            ))
-        }
-        hiddenWindow.ignoresMouseEvents = true
-        hiddenWindow.hidesOnDeactivate = false
-        hiddenWindow.collectionBehavior = [.stationary, .ignoresCycle]
-        hiddenWindow.orderFrontRegardless()
-        window = hiddenWindow
         preview.layoutSubtreeIfNeeded()
     }
 
@@ -1239,6 +1291,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             "schemaVersion": 1,
             "ok": true,
             "command": invocation.operation.rawValue,
+            "preview": previewReport,
             "source": source,
             "device": [
                 "id": device.id,
@@ -1287,6 +1340,14 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             try CLIJSON.data(report, pretty: true).write(to: reportURL, options: .atomic)
         }
         return report
+    }
+
+    private var previewReport: [String: Any] {
+        [
+            "visibility": invocation.showPreview ? "visible" : "hidden",
+            "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
+            "captureBackend": "webkitSnapshot"
+        ]
     }
 
     private func finish(_ result: Result<[String: Any], Error>) {
@@ -1427,21 +1488,11 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         preview.frame = frame
         preview.bounds = frame
         preview.autoresizingMask = [.width, .height]
-        let panel = NSPanel(
-            contentRect: frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+        window = CLIPreviewWindow.make(
+            contentView: preview,
+            size: size,
+            showPreview: invocation.showPreview
         )
-        panel.contentView = preview
-        if let visibleFrame = NSScreen.main?.visibleFrame {
-            panel.setFrameOrigin(CGPoint(x: visibleFrame.maxX - size.width, y: visibleFrame.minY))
-        }
-        panel.ignoresMouseEvents = true
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.stationary, .ignoresCycle]
-        panel.orderFrontRegardless()
-        window = panel
         preview.layoutSubtreeIfNeeded()
     }
 
@@ -1531,7 +1582,8 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
                 duration: nil,
                 framesPerSecond: invocation.videoFPS,
                 captureScale: invocation.videoScale,
-                overwrite: invocation.overwrite
+                overwrite: invocation.overwrite,
+                frameSource: invocation.showPreview ? .windowCompositor : .webkitSnapshot
             )
             videoRecorder = recorder
             recorder.record(preview: preview) { [weak self] result in
@@ -1666,6 +1718,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             "schemaVersion": 1,
             "ok": replayErrors.isEmpty && !policyFailure,
             "command": "qa replay",
+            "preview": previewReport,
             "scenario": [
                 "id": scenario.id,
                 "name": scenario.name,
@@ -1707,6 +1760,14 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             try CLIJSON.data(report, pretty: true).write(to: reportURL, options: .atomic)
         }
         return report
+    }
+
+    private var previewReport: [String: Any] {
+        [
+            "visibility": invocation.showPreview ? "visible" : "hidden",
+            "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
+            "captureBackend": invocation.showPreview ? "windowCompositor" : "webkitSnapshot"
+        ]
     }
 
     private func finish(_ result: Result<[String: Any], Error>) {
@@ -2039,6 +2100,7 @@ private enum CLIHelp {
     DEVICE AND LAYOUT
       --device <id>                  Device profile (default: iphone-17-pro-max)
       --orientation <value>          portrait or landscape
+      --show-preview                 Display the CLI preview (hidden by default)
       --show-safe-area               Draw the safe-area guide
       --apply-safe-area              Force page content inside the safe area
       --header <file.html>           Add an HTML header layer

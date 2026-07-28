@@ -53,6 +53,13 @@ The build also creates `dist/native/viewdeck`, a standalone command-line executa
 
 ## Command-line automation
 
+CLI previews are hidden by default. ViewDeck keeps an ordered WebKit panel
+outside the bounds of every connected display so pages can render, receive
+replayed input, and produce screenshots or video without showing a mini device
+window to the user. Pass `--show-preview` when visually debugging a CLI run.
+Machine-readable reports expose the selected visibility, capture backend, and
+whether the preview window intersects a display.
+
 List the available device profiles:
 
 ```bash
@@ -103,7 +110,7 @@ The scenario embeds the exact device profile and custom geometry, portrait and o
 
 Click **Replay** below **Record actions** to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the Replay control becomes a **Stop** button; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
 
-When enabled, live video capture uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots. Capture and H.264 encoding run away from the main UI thread at a video-appropriate resolution. If the machine cannot produce a frame on time, ViewDeck skips that slot instead of issuing a burst of catch-up captures that would compete with the tested page. Explicit screenshots and checkpoints continue to use the high-fidelity composited snapshot path.
+When enabled in the interactive studio or a CLI replay using `--show-preview`, live video capture uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots. Hidden CLI runs use WebKit snapshot frames instead so recording does not require an on-screen window. Capture and H.264 encoding run away from the main UI thread at a video-appropriate resolution. If the machine cannot produce a frame on time, ViewDeck skips that slot instead of issuing a burst of catch-up captures that would compete with the tested page. Explicit screenshots and checkpoints continue to use the high-fidelity composited snapshot path.
 
 AI agents can generate a complete, valid scenario skeleton without hand-authoring the device configuration:
 

@@ -46,6 +46,31 @@ mktemp -d /tmp/viewdeck-qa.XXXXXX
 Recording and replay automatically clear data for the tested site before the
 run. Do not add a second cache-reset mechanism.
 
+## Keep agent runs invisible
+
+CLI previews are hidden by default. ViewDeck keeps the ordered WKWebView panel
+outside every connected display and uses WebKit snapshot capture, so agents can
+replay input and collect screenshots or video without exposing a mini preview
+to the user. Do not pass `--show-preview` unless the user explicitly asks to
+watch the run or an on-screen control run is needed to debug rendering.
+
+For `capture`, `inspect`, `record`, and `qa replay`, confirm the report contains:
+
+```json
+{
+  "preview": {
+    "visibility": "hidden",
+    "windowIntersectsDisplay": false,
+    "captureBackend": "webkitSnapshot"
+  }
+}
+```
+
+Treat an unexpected visible preview or display intersection as a failed hidden
+run. Hidden video may contain fewer frames than the requested FPS when WebKit
+snapshot capture cannot keep up; inspect actual MP4 duration and representative
+frames rather than requiring every scheduled frame.
+
 ## Run a one-state audit
 
 Use `--project` for a Vite or other managed development server, `--file` for
@@ -209,6 +234,8 @@ Treat the command exit status and JSON report as evidence, not the screenshot
 alone. Check:
 
 - top-level `ok` and `errors`
+- `preview.visibility`, `preview.windowIntersectsDisplay`, and
+  `preview.captureBackend`
 - `audit.pageErrors`
 - `audit.consoleMessages` and `audit.issues`
 - `playback` and every `timingPlan.entries[].adjustment`
@@ -228,7 +255,8 @@ a fix.
 
 Return:
 
-1. The tested source, device, orientation, and Safari/header/footer state.
+1. The tested source, device, orientation, Safari/header/footer state, and
+   preview visibility.
 2. The scenario and report paths.
 3. Every screenshot, checkpoint folder, and video path.
 4. Original and effective replay duration when smart timing was used.
