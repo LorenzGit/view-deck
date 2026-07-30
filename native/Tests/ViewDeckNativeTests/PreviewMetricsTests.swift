@@ -11,6 +11,17 @@ private func firstWebView(in view: NSView) -> WKWebView? {
     return nil
 }
 
+private func allWebViews(in view: NSView) -> [WKWebView] {
+    var result: [WKWebView] = []
+    if let webView = view as? WKWebView {
+        result.append(webView)
+    }
+    for subview in view.subviews {
+        result.append(contentsOf: allWebViews(in: subview))
+    }
+    return result
+}
+
 private final class PreviewNavigationProbe: DevicePreviewDelegate {
     var starts = 0
     var finishes = 0
@@ -119,9 +130,81 @@ final class PreviewMetricsTests: XCTestCase {
             62
         )
         XCTAssertEqual(
+            PreviewMetrics.headerReservedHeight(device: device, landscape: false, headerHeight: 48),
+            110
+        )
+        XCTAssertEqual(
             PreviewMetrics.contentSize(device: device, landscape: false, headerHeight: 48, footerHeight: 56),
             CGSize(width: 440, height: 790)
         )
+    }
+
+    func testIPhoneAppHeaderReservesPageGeometryWithoutAnotherNativeInset() throws {
+        guard #available(macOS 26.0, *) else { return }
+        let device = try XCTUnwrap(BuiltinDevices.all.first { $0.id == "iphone-17-pro-max" })
+        let preview = DevicePreviewView(profile: device)
+        preview.headerHTML = "<!doctype html><header>Toolbar</header>"
+        preview.headerHeight = 48
+        preview.frame = CGRect(origin: .zero, size: preview.logicalSize)
+        preview.layoutSubtreeIfNeeded()
+
+        let webViews = allWebViews(in: preview)
+        XCTAssertTrue(webViews.map(\.frame).contains(CGRect(x: 0, y: 62, width: 444, height: 48)))
+        let page = try XCTUnwrap(webViews.first { $0.frame.height == 850 })
+        XCTAssertEqual(page.frame, CGRect(x: 0, y: 110, width: 444, height: 850))
+        XCTAssertEqual(page.obscuredContentInsets.top, 0)
+        XCTAssertEqual(page.obscuredContentInsets.bottom, 0)
+    }
+
+    func testHeaderMakesAnEmbeddedRuntimeTreatZeroTopInsetAsAuthoritative() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckHeaderRuntime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = directory.appendingPathComponent("index.html")
+        try """
+        <!doctype html>
+        <title>header runtime</title>
+        <script>
+          window.RundotGameAPI = { isMock: () => true };
+          window.headerUsesAuthoritativeInsets = window.RundotGameAPI.isMock() === false;
+        </script>
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        let settled = expectation(description: "header runtime settles")
+        var retainedPreview: DevicePreviewView?
+        var retainedProbe: PreviewNavigationProbe?
+
+        DispatchQueue.main.async {
+            let preview = DevicePreviewView(profile: BuiltinDevices.all[1])
+            let probe = PreviewNavigationProbe()
+            retainedPreview = preview
+            retainedProbe = probe
+            preview.delegate = probe
+            preview.headerHTML = "<!doctype html><header>Toolbar</header>"
+
+            probe.didFinish = { _, url in
+                guard url?.standardizedFileURL == file.standardizedFileURL,
+                      let webView = firstWebView(in: preview) else { return }
+                webView.evaluateJavaScript("window.headerUsesAuthoritativeInsets === true") { value, error in
+                    XCTAssertNil(error)
+                    XCTAssertEqual(value as? Bool, true)
+                    settled.fulfill()
+                }
+            }
+            probe.didFail = { message in
+                XCTFail("Preview failed while testing header runtime: \(message)")
+                settled.fulfill()
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                preview.loadLocalFile(file)
+            }
+        }
+
+        wait(for: [settled], timeout: 5)
+        withExtendedLifetime((retainedPreview, retainedProbe)) {}
     }
 
     func testSafeAreaRotatesWithTheDevice() {
@@ -143,6 +226,60 @@ final class PreviewMetricsTests: XCTestCase {
         XCTAssertEqual(
             SafeAreaGeometry.pageInsets(appInsets, landscape: false, safariChrome: false),
             appInsets
+        )
+    }
+
+    func testLandscapeSideRailsConsumeTheSafeAreaBeforeThePage() {
+        let appInsets = EdgeInsets(top: 62, right: 0, bottom: 34, left: 0)
+
+        XCTAssertEqual(
+            SafeAreaGeometry.pageInsets(
+                appInsets,
+                landscape: true,
+                safariChrome: false,
+                leftReservedWidth: 118,
+                rightReservedWidth: 118
+            ),
+            .zero
+        )
+        XCTAssertEqual(
+            SafeAreaGeometry.pageInsets(
+                appInsets,
+                landscape: true,
+                safariChrome: false,
+                leftReservedWidth: 20,
+                rightReservedWidth: 10
+            ),
+            EdgeInsets(top: 0, right: 24, bottom: 0, left: 42)
+        )
+    }
+
+    func testPortraitIgnoresReservedSideWidths() {
+        let appInsets = EdgeInsets(top: 62, right: 0, bottom: 34, left: 0)
+
+        XCTAssertEqual(
+            SafeAreaGeometry.pageInsets(
+                appInsets,
+                landscape: false,
+                safariChrome: false,
+                leftReservedWidth: 118,
+                rightReservedWidth: 118
+            ),
+            appInsets
+        )
+    }
+
+    func testPortraitHeaderConsumesTheTopSafeAreaBeforeThePage() {
+        let appInsets = EdgeInsets(top: 62, right: 0, bottom: 34, left: 0)
+
+        XCTAssertEqual(
+            SafeAreaGeometry.pageInsets(
+                appInsets,
+                landscape: false,
+                safariChrome: false,
+                topReservedHeight: 110
+            ),
+            EdgeInsets(top: 0, right: 0, bottom: 34, left: 0)
         )
     }
 

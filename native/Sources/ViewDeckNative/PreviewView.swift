@@ -177,40 +177,56 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
     }
     var headerHTML: String? {
-        didSet { updateLayerWebViews(); needsLayout = true }
+        didSet {
+            let activationChanged = (oldValue == nil) != (headerHTML == nil)
+            updateLayerWebViews()
+            pageLayerGeometryDidChange()
+            if activationChanged {
+                rebuildEnvironment(reload: currentURL != nil)
+            }
+        }
     }
     var headerBaseURL: URL? {
         didSet { if headerHTML != nil { updateLayerWebViews() } }
     }
     var footerHTML: String? {
-        didSet { updateLayerWebViews(); needsLayout = true }
+        didSet {
+            updateLayerWebViews()
+            pageLayerGeometryDidChange()
+        }
     }
     var footerBaseURL: URL? {
         didSet { if footerHTML != nil { updateLayerWebViews() } }
     }
     var headerHeight: CGFloat = 48 {
-        didSet { needsLayout = true }
+        didSet { pageLayerGeometryDidChange() }
     }
     var footerHeight: CGFloat = 56 {
-        didSet { needsLayout = true }
+        didSet { pageLayerGeometryDidChange() }
     }
     var leftHTML: String? {
-        didSet { updateLayerWebViews(); needsLayout = true }
+        didSet {
+            updateLayerWebViews()
+            pageLayerGeometryDidChange()
+        }
     }
     var leftBaseURL: URL? {
         didSet { if leftHTML != nil { updateLayerWebViews() } }
     }
     var rightHTML: String? {
-        didSet { updateLayerWebViews(); needsLayout = true }
+        didSet {
+            updateLayerWebViews()
+            pageLayerGeometryDidChange()
+        }
     }
     var rightBaseURL: URL? {
         didSet { if rightHTML != nil { updateLayerWebViews() } }
     }
     var leftWidth: CGFloat = 118 {
-        didSet { needsLayout = true }
+        didSet { pageLayerGeometryDidChange() }
     }
     var rightWidth: CGFloat = 118 {
-        didSet { needsLayout = true }
+        didSet { pageLayerGeometryDidChange() }
     }
 
     private(set) var currentURL: URL?
@@ -329,11 +345,32 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     }
 
     private var webContentSafeArea: EdgeInsets {
-        SafeAreaGeometry.pageInsets(
+        let activeHeaderHeight = headerHTML == nil ? 0 : headerHeight
+        let sideWidths = PreviewMetrics.sideLayerWidths(
+            viewportWidth: logicalViewportSize.width,
+            landscape: landscape,
+            leftWidth: leftHTML == nil ? 0 : leftWidth,
+            rightWidth: rightHTML == nil ? 0 : rightWidth
+        )
+        return SafeAreaGeometry.pageInsets(
             safeArea,
             landscape: landscape,
-            safariChrome: profile.safariChrome
+            safariChrome: profile.safariChrome,
+            topReservedHeight: PreviewMetrics.headerReservedHeight(
+                device: profile,
+                landscape: landscape,
+                headerHeight: activeHeaderHeight
+            ),
+            leftReservedWidth: sideWidths.left,
+            rightReservedWidth: sideWidths.right
         )
+    }
+
+    private func pageLayerGeometryDidChange() {
+        safeOverlay.insets = webContentSafeArea
+        updateNativePageInsets()
+        needsLayout = true
+        schedulePageEnvironmentUpdate(orientationChanged: false)
     }
 
     func attach(to canvas: PreviewCanvasView) {
@@ -810,6 +847,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             height: pageFrame.height + (footerHTML == nil ? bottomOverscan : 0)
         )
         webView.bounds = CGRect(origin: .zero, size: webView.frame.size)
+        updateNativePageInsets()
         let safeOverlayFrame = profile.safariChrome
             ? pageFrame
             : CGRect(x: contentX, y: 0, width: contentWidth, height: viewportSize.height)
@@ -1142,12 +1180,60 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
     private func bootstrapScript() -> String {
         let initialEnvironment = pageEnvironmentJSON()
+        let headerManagesTopInset = headerHTML != nil ? "true" : "false"
 
         return """
         (() => {
           const initialEnvironment = \(initialEnvironment);
+          const headerManagesTopInset = \(headerManagesTopInset);
           const runtime = window.__VIEWDECK_RUNTIME__ || {};
           window.__VIEWDECK_RUNTIME__ = runtime;
+
+          // A native header makes the webview's zero top inset authoritative.
+          // Preserve an embedded runtime's complete local implementation while
+          // presenting the same non-mock layout semantics it exposes on-device.
+          const installHeaderManagedRuntime = () => {
+            if (!headerManagesTopInset || runtime.headerManagedRuntimeInstalled) return;
+            runtime.headerManagedRuntimeInstalled = true;
+
+            let embeddedAPI;
+            const applyAuthoritativeInsets = (candidate) => {
+              if (!candidate || (typeof candidate !== 'object' && typeof candidate !== 'function')) {
+                return candidate;
+              }
+              try {
+                Object.defineProperty(candidate, 'isMock', {
+                  configurable: true,
+                  enumerable: true,
+                  get() {
+                    return () => false;
+                  },
+                  set() {}
+                });
+              } catch {
+                candidate.isMock = () => false;
+              }
+              return candidate;
+            };
+
+            const existingAPI = window.RundotGameAPI;
+            try {
+              Object.defineProperty(window, 'RundotGameAPI', {
+                configurable: true,
+                enumerable: true,
+                get() {
+                  return embeddedAPI;
+                },
+                set(value) {
+                  embeddedAPI = applyAuthoritativeInsets(value);
+                }
+              });
+              if (existingAPI) window.RundotGameAPI = existingAPI;
+            } catch {
+              applyAuthoritativeInsets(existingAPI);
+            }
+          };
+          installHeaderManagedRuntime();
 
           const defineGetter = (object, key, getter) => {
             try {

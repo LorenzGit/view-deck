@@ -207,9 +207,22 @@ enum SafeAreaGeometry {
         )
     }
 
-    static func pageInsets(_ insets: EdgeInsets, landscape: Bool, safariChrome: Bool) -> EdgeInsets {
+    static func pageInsets(
+        _ insets: EdgeInsets,
+        landscape: Bool,
+        safariChrome: Bool,
+        topReservedHeight: CGFloat = 0,
+        leftReservedWidth: CGFloat = 0,
+        rightReservedWidth: CGFloat = 0
+    ) -> EdgeInsets {
         guard !safariChrome else { return .zero }
-        return oriented(insets, landscape: landscape)
+        let orientedInsets = oriented(insets, landscape: landscape)
+        return EdgeInsets(
+            top: max(0, orientedInsets.top - topReservedHeight),
+            right: max(0, orientedInsets.right - rightReservedWidth),
+            bottom: orientedInsets.bottom,
+            left: max(0, orientedInsets.left - leftReservedWidth)
+        )
     }
 }
 
@@ -293,6 +306,18 @@ enum PreviewMetrics {
         return appStatusBarHeight(device: device, landscape: landscape)
     }
 
+    static func headerReservedHeight(
+        device: DeviceProfile,
+        landscape: Bool,
+        headerHeight: CGFloat
+    ) -> CGFloat {
+        headerTopInset(
+            device: device,
+            landscape: landscape,
+            headerHeight: headerHeight
+        ) + headerHeight
+    }
+
     static func contentSize(
         device: DeviceProfile,
         landscape: Bool,
@@ -311,14 +336,14 @@ enum PreviewMetrics {
         )
         let safariTop = device.safariChrome ? (landscape ? SafariChromeMetrics.landscapeTop : SafariChromeMetrics.portraitTop) : 0
         let safariBottom = device.safariChrome ? (landscape ? SafariChromeMetrics.landscapeBottom : SafariChromeMetrics.portraitBottom) : 0
-        let headerTopInset = headerTopInset(
+        let headerReservedHeight = headerReservedHeight(
             device: device,
             landscape: landscape,
             headerHeight: headerHeight
         )
         return CGSize(
             width: max(1, width - sideWidths.left - sideWidths.right),
-            height: max(1, height - safariTop - safariBottom - headerTopInset - headerHeight - footerHeight)
+            height: max(1, height - safariTop - safariBottom - headerReservedHeight - footerHeight)
         )
     }
 

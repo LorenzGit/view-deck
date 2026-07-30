@@ -211,7 +211,7 @@ final class QAScenarioTests: XCTestCase {
     }
 
     func testTemplateConfigurationMatchesNativePreviewGeometry() {
-        let profile = BuiltinDevices.all[0]
+        let profile = BuiltinDevices.all[1]
         let header = QALayerConfiguration(
             kind: .header,
             html: "<header>Score</header>",
@@ -277,6 +277,40 @@ final class QAScenarioTests: XCTestCase {
         XCTAssertEqual(generated.left?.widthCSSPixels, 118)
         XCTAssertEqual(generated.right?.kind, .right)
         XCTAssertEqual(generated.right?.widthCSSPixels, 118)
+        XCTAssertEqual(generated.safeArea.orientedDevice, EdgeInsets(top: 0, right: 34, bottom: 0, left: 62))
+        XCTAssertEqual(generated.safeArea.exposedToPage, .zero)
+    }
+
+    func testPortraitHeaderConsumesSafeAreaInScenarioMetadata() {
+        let profile = BuiltinDevices.all[1]
+        let header = QALayerConfiguration(
+            kind: .header,
+            html: "<header>Toolbar</header>",
+            height: 48,
+            sourcePath: nil,
+            baseURL: nil
+        )
+        let footer = QALayerConfiguration(
+            kind: .footer,
+            html: nil,
+            height: 56,
+            sourcePath: nil,
+            baseURL: nil
+        )
+
+        let configuration = QADeviceConfiguration.template(
+            profile: profile,
+            landscape: false,
+            showSafeArea: true,
+            applySafeAreaToPage: false,
+            header: header,
+            footer: footer
+        )
+
+        XCTAssertEqual(
+            configuration.safeArea.exposedToPage,
+            EdgeInsets(top: 0, right: 0, bottom: 34, left: 0)
+        )
     }
 
     func testDerivesClicksAndSwipesWithGestureIntervals() throws {

@@ -1183,22 +1183,39 @@ extension QADeviceConfiguration {
             width: landscape ? profile.viewport.height : profile.viewport.width,
             height: landscape ? profile.viewport.width : profile.viewport.height
         )
+        let activeHeaderHeight = header.enabled ? CGFloat(header.heightCSSPixels) : 0
+        let activeFooterHeight = footer.enabled ? CGFloat(footer.heightCSSPixels) : 0
+        let leftWidth = left?.enabled == true ? CGFloat(left?.reservedExtentCSSPixels ?? 0) : 0
+        let rightWidth = right?.enabled == true ? CGFloat(right?.reservedExtentCSSPixels ?? 0) : 0
         let page = PreviewMetrics.contentSize(
             device: profile,
             landscape: landscape,
-            headerHeight: header.enabled ? CGFloat(header.heightCSSPixels) : 0,
-            footerHeight: footer.enabled ? CGFloat(footer.heightCSSPixels) : 0,
-            leftWidth: left?.enabled == true ? CGFloat(left?.reservedExtentCSSPixels ?? 0) : 0,
-            rightWidth: right?.enabled == true ? CGFloat(right?.reservedExtentCSSPixels ?? 0) : 0
+            headerHeight: activeHeaderHeight,
+            footerHeight: activeFooterHeight,
+            leftWidth: leftWidth,
+            rightWidth: rightWidth
         )
         let orientedSafe = SafeAreaGeometry.oriented(
             profile.safeArea,
             landscape: landscape
         )
+        let sideWidths = PreviewMetrics.sideLayerWidths(
+            viewportWidth: screen.width,
+            landscape: landscape,
+            leftWidth: leftWidth,
+            rightWidth: rightWidth
+        )
         let exposedSafe = SafeAreaGeometry.pageInsets(
             profile.safeArea,
             landscape: landscape,
-            safariChrome: profile.safariChrome
+            safariChrome: profile.safariChrome,
+            topReservedHeight: PreviewMetrics.headerReservedHeight(
+                device: profile,
+                landscape: landscape,
+                headerHeight: activeHeaderHeight
+            ),
+            leftReservedWidth: sideWidths.left,
+            rightReservedWidth: sideWidths.right
         )
         let topChrome = profile.safariChrome
             ? (landscape ? SafariChromeMetrics.landscapeTop : SafariChromeMetrics.portraitTop)
@@ -1264,10 +1281,24 @@ extension QADeviceConfiguration {
         let screen = preview.logicalViewportSize
         let page = preview.contentViewportSize
         let orientedSafe = SafeAreaGeometry.oriented(preview.safeArea, landscape: preview.landscape)
+        let activeHeaderHeight = preview.headerHTML == nil ? 0 : preview.headerHeight
+        let sideWidths = PreviewMetrics.sideLayerWidths(
+            viewportWidth: screen.width,
+            landscape: preview.landscape,
+            leftWidth: preview.leftHTML == nil ? 0 : preview.leftWidth,
+            rightWidth: preview.rightHTML == nil ? 0 : preview.rightWidth
+        )
         let exposedSafe = SafeAreaGeometry.pageInsets(
             preview.safeArea,
             landscape: preview.landscape,
-            safariChrome: device.safariChrome
+            safariChrome: device.safariChrome,
+            topReservedHeight: PreviewMetrics.headerReservedHeight(
+                device: device,
+                landscape: preview.landscape,
+                headerHeight: activeHeaderHeight
+            ),
+            leftReservedWidth: sideWidths.left,
+            rightReservedWidth: sideWidths.right
         )
         let topChrome = device.safariChrome
             ? (preview.landscape ? SafariChromeMetrics.landscapeTop : SafariChromeMetrics.portraitTop)
