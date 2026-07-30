@@ -123,6 +123,11 @@ enum PreviewNavigationPolicy {
 }
 
 final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
+    private struct AudioActivityInterval {
+        let startMilliseconds: Int
+        var endMilliseconds: Int?
+    }
+
     private static let videoFrameCaptureQueue = DispatchQueue(
         label: "studio.viewdeck.video-frame-capture",
         qos: .userInitiated
@@ -130,6 +135,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
     private static let mobileTrailingOverscan: CGFloat = 4
     private static let mobileBottomOverscan: CGFloat = 4
+    private static let audioMonitorInterval: TimeInterval = 0.02
+    private static let audioMutedFlag: UInt = 1
 
     private static func enableDeveloperTools(in configuration: WKWebViewConfiguration) {
         // WebKit does not expose a public API for opening Web Inspector from a
@@ -247,6 +254,12 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private var rightWebView: WKWebView?
     private var navigationGeneration = 0
     private var environmentUpdateGeneration = 0
+    private var silentAudioVerificationEnabled = false
+    private var audioActivitySupported = false
+    private var audioMonitorTimer: Timer?
+    private var audioMonitoringStartedAt: Date?
+    private var audioMonitoringStartedUptime: TimeInterval?
+    private var audioActivityIntervals: [AudioActivityInterval] = []
 
     init(profile: DeviceProfile) {
         self.profile = profile
@@ -314,6 +327,10 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    deinit {
+        audioMonitorTimer?.invalidate()
+    }
 
     var logicalViewportSize: CGSize {
         landscape
@@ -488,6 +505,63 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                 completion(.success(value))
             }
         }
+    }
+
+    @discardableResult
+    func enableSilentAudioVerification() -> Bool {
+        guard !silentAudioVerificationEnabled else { return true }
+        guard Self.setPageAudioMuted(true, in: webView),
+              Self.isPageAudioMuted(in: webView) else { return false }
+
+        silentAudioVerificationEnabled = true
+        audioActivitySupported = Self.supportsAudioActivity(in: webView)
+        audioMonitoringStartedAt = Date()
+        audioMonitoringStartedUptime = ProcessInfo.processInfo.systemUptime
+        audioActivityIntervals = []
+        rebuildEnvironment(reload: false)
+        applyAudioMuteToEveryWebView()
+        sampleAudioActivity()
+
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: Self.audioMonitorInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.sampleAudioActivity()
+        }
+        timer.tolerance = Self.audioMonitorInterval / 4
+        audioMonitorTimer = timer
+        return true
+    }
+
+    func silentAudioVerificationReport() -> [String: Any] {
+        sampleAudioActivity()
+        let now = ProcessInfo.processInfo.systemUptime
+        let muteApplied = allWebViews.allSatisfy(Self.isPageAudioMuted)
+        let intervals = audioActivityIntervals.map { interval -> [String: Any] in
+            let end = interval.endMilliseconds ?? elapsedAudioMilliseconds(at: now)
+            return [
+                "startMilliseconds": interval.startMilliseconds,
+                "endMilliseconds": end,
+                "durationMilliseconds": max(0, end - interval.startMilliseconds)
+            ]
+        }
+        return [
+            "mode": "verify-silent",
+            "output": muteApplied ? "muted" : "unverified",
+            "muteApplied": muteApplied,
+            "muteBackend": "webkitPageMutedSPI",
+            "activityBackend": "webkitPlayingAudioSPI",
+            "activitySampleIntervalMilliseconds": Int(Self.audioMonitorInterval * 1_000),
+            "activityMonitoringSupported": audioActivitySupported,
+            "monitoringStartedAt": audioMonitoringStartedAt.map {
+                ISO8601DateFormatter().string(from: $0)
+            } ?? "",
+            "everActive": !intervals.isEmpty,
+            "currentlyActive": audioActivityIntervals.last.map {
+                $0.endMilliseconds == nil
+            } ?? false,
+            "activeIntervals": intervals
+        ]
     }
 
     func captureAudit(completion: @escaping (Result<[String: Any], Error>) -> Void) {
@@ -1061,6 +1135,9 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         let layerView = WKWebView(frame: .zero, configuration: configuration)
         layerView.setValue(false, forKey: "drawsBackground")
         if #available(macOS 13.3, *) { layerView.isInspectable = true }
+        if silentAudioVerificationEnabled {
+            _ = Self.setPageAudioMuted(true, in: layerView)
+        }
         viewportClip.addSubview(layerView)
         return layerView
     }
@@ -1077,6 +1154,13 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
+        if silentAudioVerificationEnabled {
+            controller.addUserScript(WKUserScript(
+                source: Self.audioDiagnosticsBootstrapScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
         controller.addUserScript(WKUserScript(
             source: Self.qaBootstrapScript,
             injectionTime: .atDocumentStart,
@@ -1088,6 +1172,69 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             forMainFrameOnly: false
         ))
         if reload, currentURL != nil { webView.reload() }
+    }
+
+    private var allWebViews: [WKWebView] {
+        [webView, headerWebView, footerWebView, leftWebView, rightWebView].compactMap { $0 }
+    }
+
+    private func applyAudioMuteToEveryWebView() {
+        for view in allWebViews {
+            _ = Self.setPageAudioMuted(true, in: view)
+        }
+    }
+
+    private func sampleAudioActivity() {
+        guard silentAudioVerificationEnabled, audioActivitySupported else { return }
+        let isActive = allWebViews.contains(where: Self.isPlayingAudio)
+        let elapsed = elapsedAudioMilliseconds(at: ProcessInfo.processInfo.systemUptime)
+        if isActive {
+            if audioActivityIntervals.last?.endMilliseconds != nil || audioActivityIntervals.isEmpty {
+                audioActivityIntervals.append(AudioActivityInterval(
+                    startMilliseconds: elapsed,
+                    endMilliseconds: nil
+                ))
+            }
+        } else if !audioActivityIntervals.isEmpty,
+                  audioActivityIntervals[audioActivityIntervals.count - 1].endMilliseconds == nil {
+            audioActivityIntervals[audioActivityIntervals.count - 1].endMilliseconds = elapsed
+        }
+    }
+
+    private func elapsedAudioMilliseconds(at uptime: TimeInterval) -> Int {
+        guard let started = audioMonitoringStartedUptime else { return 0 }
+        return max(0, Int((uptime - started) * 1_000))
+    }
+
+    private static func setPageAudioMuted(_ muted: Bool, in webView: WKWebView) -> Bool {
+        // Public WKWebView media controls pause playback. Hidden QA runs need
+        // WebKit's page mute so media timing continues while output is silent.
+        let selector = NSSelectorFromString("_setPageMuted:")
+        guard webView.responds(to: selector) else { return false }
+        typealias Setter = @convention(c) (AnyObject, Selector, UInt) -> Void
+        let setter = unsafeBitCast(webView.method(for: selector), to: Setter.self)
+        setter(webView, selector, muted ? audioMutedFlag : 0)
+        return true
+    }
+
+    private static func supportsAudioActivity(in webView: WKWebView) -> Bool {
+        webView.responds(to: NSSelectorFromString("_isPlayingAudio"))
+    }
+
+    private static func isPageAudioMuted(in webView: WKWebView) -> Bool {
+        let selector = NSSelectorFromString("_mediaMutedState")
+        guard webView.responds(to: selector) else { return false }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> UInt
+        let getter = unsafeBitCast(webView.method(for: selector), to: Getter.self)
+        return getter(webView, selector) & audioMutedFlag != 0
+    }
+
+    private static func isPlayingAudio(in webView: WKWebView) -> Bool {
+        let selector = NSSelectorFromString("_isPlayingAudio")
+        guard webView.responds(to: selector) else { return false }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+        let getter = unsafeBitCast(webView.method(for: selector), to: Getter.self)
+        return getter(webView, selector)
     }
 
     private func schedulePageEnvironmentUpdate(orientationChanged: Bool) {
@@ -2192,6 +2339,109 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     })();
     """
 
+    private static let audioDiagnosticsBootstrapScript = """
+    (() => {
+      const diagnostics = window.__VIEWDECK_DIAGNOSTICS__;
+      if (!diagnostics || diagnostics.audio) return;
+
+      const audio = {
+        mediaEvents: [],
+        mediaPlayCalls: [],
+        webAudioEvents: [],
+        speechEvents: []
+      };
+      diagnostics.audio = audio;
+      const append = (collection, value) => {
+        collection.push(value);
+        if (collection.length > 200) collection.splice(0, collection.length - 200);
+      };
+      const timestamp = () => Math.round(performance.now() * 100) / 100;
+      const mediaDetails = (element) => ({
+        tagName: element?.tagName?.toLowerCase() || null,
+        id: element?.id || null,
+        currentSrc: element?.currentSrc || element?.src || null,
+        currentTime: Number.isFinite(element?.currentTime) ? element.currentTime : null,
+        duration: Number.isFinite(element?.duration) ? element.duration : null,
+        readyState: element?.readyState ?? null,
+        networkState: element?.networkState ?? null,
+        paused: element?.paused ?? null,
+        ended: element?.ended ?? null,
+        error: element?.error ? {
+          code: element.error.code,
+          message: element.error.message || null
+        } : null
+      });
+
+      for (const name of [
+        'loadstart', 'loadedmetadata', 'canplay', 'play', 'playing',
+        'pause', 'ended', 'stalled', 'suspend', 'abort', 'error'
+      ]) {
+        document.addEventListener(name, (event) => {
+          if (!(event.target instanceof HTMLMediaElement)) return;
+          append(audio.mediaEvents, {
+            type: name,
+            atMilliseconds: timestamp(),
+            media: mediaDetails(event.target)
+          });
+        }, true);
+      }
+
+      const mediaPlay = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function(...args) {
+        append(audio.mediaPlayCalls, {
+          atMilliseconds: timestamp(),
+          media: mediaDetails(this)
+        });
+        return Reflect.apply(mediaPlay, this, args);
+      };
+
+      const contextPrototype = window.AudioContext?.prototype ||
+        window.webkitAudioContext?.prototype;
+      if (contextPrototype && typeof contextPrototype.resume === 'function') {
+        const resume = contextPrototype.resume;
+        contextPrototype.resume = function(...args) {
+          append(audio.webAudioEvents, {
+            type: 'context-resume',
+            atMilliseconds: timestamp(),
+            state: this.state,
+            currentTime: this.currentTime
+          });
+          return Reflect.apply(resume, this, args);
+        };
+      }
+
+      const sourcePrototype = window.AudioScheduledSourceNode?.prototype;
+      if (sourcePrototype && typeof sourcePrototype.start === 'function') {
+        const start = sourcePrototype.start;
+        sourcePrototype.start = function(...args) {
+          append(audio.webAudioEvents, {
+            type: 'source-start',
+            atMilliseconds: timestamp(),
+            nodeType: this.constructor?.name || 'AudioScheduledSourceNode',
+            contextState: this.context?.state || null,
+            contextTime: this.context?.currentTime ?? null,
+            when: args[0] ?? 0
+          });
+          return Reflect.apply(start, this, args);
+        };
+      }
+
+      const speechPrototype = window.SpeechSynthesis?.prototype;
+      if (speechPrototype && typeof speechPrototype.speak === 'function') {
+        const speak = speechPrototype.speak;
+        speechPrototype.speak = function(utterance) {
+          append(audio.speechEvents, {
+            type: 'speak',
+            atMilliseconds: timestamp(),
+            textLength: utterance?.text?.length ?? 0,
+            lang: utterance?.lang || null
+          });
+          return Reflect.apply(speak, this, arguments);
+        };
+      }
+    })();
+    """
+
     private static let auditScript = """
     (() => {
       const root = document.documentElement;
@@ -2335,6 +2585,23 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
           backingHeight: canvas.height
         };
       });
+      const mediaElements = Array.from(document.querySelectorAll('audio,video')).map((element) => ({
+        selector: selectorFor(element),
+        tagName: element.tagName.toLowerCase(),
+        currentSrc: element.currentSrc || element.src || null,
+        currentTime: Number.isFinite(element.currentTime) ? element.currentTime : null,
+        duration: Number.isFinite(element.duration) ? element.duration : null,
+        readyState: element.readyState,
+        networkState: element.networkState,
+        paused: element.paused,
+        ended: element.ended,
+        muted: element.muted,
+        volume: element.volume,
+        error: element.error ? {
+          code: element.error.code,
+          message: element.error.message || null
+        } : null
+      }));
       return JSON.stringify({
         title: document.title || null,
         url: location.href,
@@ -2344,6 +2611,13 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         safeArea,
         issues,
         canvases,
+        audio: {
+          mediaElements,
+          mediaEvents: diagnostics.audio?.mediaEvents || [],
+          mediaPlayCalls: diagnostics.audio?.mediaPlayCalls || [],
+          webAudioEvents: diagnostics.audio?.webAudioEvents || [],
+          speechEvents: diagnostics.audio?.speechEvents || []
+        },
         consoleMessages: diagnostics.consoleMessages || [],
         pageErrors: diagnostics.pageErrors || []
       });

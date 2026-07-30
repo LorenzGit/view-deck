@@ -56,6 +56,35 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(invocation.npmScript, "dev")
         XCTAssertEqual(invocation.videoFPS, 30)
         XCTAssertFalse(invocation.showPreview)
+        XCTAssertEqual(invocation.audioMode, .normal)
+    }
+
+    func testHiddenPreviewParsesSilentAudioVerification() throws {
+        let invocation = try CLIInvocation.parse([
+            "inspect",
+            "--project", "/tmp/game",
+            "--audio", "verify-silent"
+        ])
+
+        XCTAssertEqual(invocation.audioMode, .verifySilent)
+        XCTAssertFalse(invocation.showPreview)
+    }
+
+    func testSilentAudioVerificationRejectsVisiblePreview() {
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect",
+            "--project", "/tmp/game",
+            "--audio", "verify-silent",
+            "--show-preview"
+        ]))
+    }
+
+    func testAudioModeRejectsUnknownValue() {
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect",
+            "--project", "/tmp/game",
+            "--audio", "silent"
+        ]))
     }
 
     func testHiddenPreviewOriginStaysOutsideEveryDisplay() {

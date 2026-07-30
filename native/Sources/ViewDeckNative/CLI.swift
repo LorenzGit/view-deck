@@ -530,7 +530,9 @@ public enum ViewDeckCommand {
             "preview": [
                 "defaultVisibility": "hidden",
                 "visibilityModes": ["hidden", "visible"],
-                "visibleFlag": "--show-preview"
+                "visibleFlag": "--show-preview",
+                "audioModes": ["normal", "verify-silent"],
+                "silentAudioVerificationFlag": "--audio verify-silent"
             ],
             "qa": [
                 "schemaVersion": 1,
@@ -551,7 +553,10 @@ public enum ViewDeckCommand {
                 "interactiveSafeAreaOverlap",
                 "interactiveOutsideViewport",
                 "consoleMessages",
-                "pageErrors"
+                "pageErrors",
+                "silentAudioActivity",
+                "mediaElementState",
+                "webAudioEvents"
             ]
         ]
         if json {
@@ -577,6 +582,11 @@ struct CLIInvocation {
         case record
         case qaReplay
         case qaTemplate
+    }
+
+    enum AudioMode: String {
+        case normal
+        case verifySilent = "verify-silent"
     }
 
     var operation: Operation
@@ -615,6 +625,7 @@ struct CLIInvocation {
     var failOnPageError = false
     var failOnIssues = false
     var showPreview = false
+    var audioMode: AudioMode = .normal
     var scenarioInput: URL?
     var scenarioOutput: URL?
     var scenarioName: String?
@@ -756,6 +767,14 @@ struct CLIInvocation {
             case "--fail-on-page-error": value.failOnPageError = true
             case "--fail-on-issues": value.failOnIssues = true
             case "--show-preview": value.showPreview = true
+            case "--audio":
+                let mode = try requiredValue(for: argument)
+                guard let audioMode = AudioMode(rawValue: mode) else {
+                    throw CLIError.invalidArgument(
+                        "--audio must be `normal` or `verify-silent`."
+                    )
+                }
+                value.audioMode = audioMode
             case "--speed":
                 let speed = try requiredValue(for: argument)
                 if speed == "smart" {
@@ -798,6 +817,11 @@ struct CLIInvocation {
     }
 
     private mutating func validate() throws {
+        if showPreview && audioMode == .verifySilent {
+            throw CLIError.invalidArgument(
+                "--audio verify-silent requires a hidden preview; remove --show-preview."
+            )
+        }
         if operation == .qaReplay {
             guard let scenarioInput else {
                 throw CLIError.invalidArgument("qa replay requires a .viewdeck.json scenario file.")
@@ -1029,6 +1053,10 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
     private func preparePreview() throws {
         preview = DevicePreviewView(profile: device)
         preview.delegate = self
+        if invocation.audioMode == .verifySilent,
+           !preview.enableSilentAudioVerification() {
+            throw CLIError.audioVerificationUnavailable
+        }
         preview.landscape = invocation.landscape
         preview.showSafeArea = invocation.showSafeArea
         preview.applySafeAreaToPage = invocation.applySafeArea
@@ -1332,6 +1360,9 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
                 "durationMs": Int(Date().timeIntervalSince(startedAt) * 1_000)
             ]
         ]
+        if invocation.audioMode == .verifySilent {
+            report["audio"] = preview.silentAudioVerificationReport()
+        }
         report = CLIJSON.removingInvalidNulls(report)
         if let reportURL = invocation.reportOutput {
             if invocation.overwrite, FileManager.default.fileExists(atPath: reportURL.path) {
@@ -1446,6 +1477,10 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         let configuration = scenario.configuration
         preview = DevicePreviewView(profile: configuration.profile)
         preview.delegate = self
+        if invocation.audioMode == .verifySilent,
+           !preview.enableSilentAudioVerification() {
+            throw CLIError.audioVerificationUnavailable
+        }
         preview.safeArea = configuration.safeArea.configuredPortrait
         preview.landscape = configuration.orientation == "landscape"
         preview.showSafeArea = configuration.safeArea.guideVisible
@@ -1714,7 +1749,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         } else {
             playbackSpeedValue = invocation.playbackSpeed
         }
-        let report: [String: Any] = [
+        var report: [String: Any] = [
             "schemaVersion": 1,
             "ok": replayErrors.isEmpty && !policyFailure,
             "command": "qa replay",
@@ -1753,6 +1788,9 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
                 "durationMilliseconds": Int(Date().timeIntervalSince(startedAt) * 1_000)
             ]
         ]
+        if invocation.audioMode == .verifySilent {
+            report["audio"] = preview.silentAudioVerificationReport()
+        }
         if let reportURL = invocation.reportOutput {
             if invocation.overwrite, FileManager.default.fileExists(atPath: reportURL.path) {
                 try FileManager.default.removeItem(at: reportURL)
@@ -2051,6 +2089,7 @@ private enum CLIError: LocalizedError {
     case preparation(String)
     case timeout(TimeInterval)
     case serverFailed
+    case audioVerificationUnavailable
     case imageEncoding
     case videoEncoding(String)
     case jsonEncoding
@@ -2067,6 +2106,8 @@ private enum CLIError: LocalizedError {
         case .preparation(let message): return "Page preparation failed: \(message)"
         case .timeout(let seconds): return "Timed out after \(seconds) seconds."
         case .serverFailed: return "The local development server exited before the preview was ready."
+        case .audioVerificationUnavailable:
+            return "Silent audio verification is unavailable in this WebKit version."
         case .imageEncoding: return "ViewDeck could not encode the screenshot as PNG."
         case .videoEncoding(let message): return "ViewDeck could not encode the MP4: \(message)"
         case .jsonEncoding: return "ViewDeck could not encode the JSON report."
@@ -2101,6 +2142,7 @@ private enum CLIHelp {
       --device <id>                  Device profile (default: iphone-17-pro-max)
       --orientation <value>          portrait or landscape
       --show-preview                 Display the CLI preview (hidden by default)
+      --audio <mode>                 normal or verify-silent (hidden previews only)
       --show-safe-area               Draw the safe-area guide
       --apply-safe-area              Force page content inside the safe area
       --header <file.html>           Add an HTML header layer
@@ -2151,6 +2193,7 @@ private enum CLIHelp {
       viewdeck devices list --json
       viewdeck capture http://localhost:5173 --device iphone-17-pro-max --output page.png --report page.json
       viewdeck inspect --project . --npm-script dev --wait-for canvas --json
+      viewdeck inspect --project . --audio verify-silent --report audio.json --json
       viewdeck record --project . --npm-script dev --wait-for canvas --duration 6 --fps 12 --output game.mp4 --screenshot game.png --report game.json
       viewdeck qa template http://localhost:5173 --device iphone-17-pro-max --output gameplay.viewdeck.json
       viewdeck qa replay gameplay.viewdeck.json --speed smart --artifacts qa-results --video replay.mp4 --report replay.json

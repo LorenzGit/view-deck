@@ -60,6 +60,12 @@ window to the user. Pass `--show-preview` when visually debugging a CLI run.
 Machine-readable reports expose the selected visibility, capture backend, and
 whether the preview window intersects a display.
 
+For an offscreen run that may play sound, pass `--audio verify-silent`.
+ViewDeck mutes the WebKit page output without pausing its media timeline, then
+reports timestamped native audio activity together with HTML media errors,
+media events, and Web Audio source starts. This mode is intentionally rejected
+when `--show-preview` is enabled.
+
 List the available device profiles:
 
 ```bash
@@ -74,6 +80,7 @@ dist/native/viewdeck capture \
   --npm-script dev \
   --device iphone-17-pro-max \
   --wait-for canvas \
+  --audio verify-silent \
   --output /tmp/game.png \
   --report /tmp/game.json
 ```
@@ -130,6 +137,7 @@ The same replay is available to scripts and AI agents. `--speed smart` preserves
 ```bash
 dist/native/viewdeck qa replay /tmp/gameplay.viewdeck.json \
   --speed smart \
+  --audio verify-silent \
   --artifacts /tmp/qa-checkpoints \
   --video /tmp/qa-replay.mp4 \
   --screenshot /tmp/qa-final.png \
