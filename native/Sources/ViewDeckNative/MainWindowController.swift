@@ -567,6 +567,17 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         choose.imagePosition = .imageLeading
         choose.toolTip = "Choose the working folder for scripts and custom commands"
         inspectorStack.addArrangedSubview(choose)
+        let openTerminal = makeWideButton("Open terminal at project", action: #selector(openTerminalForSelectedProject))
+        openTerminal.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        openTerminal.imagePosition = .imageLeading
+        if let projectFolder {
+            openTerminal.toolTip = "Open Terminal in \(projectFolder.path)"
+            openTerminal.isEnabled = true
+        } else {
+            openTerminal.toolTip = "Choose a local project first"
+            openTerminal.isEnabled = false
+        }
+        inspectorStack.addArrangedSubview(openTerminal)
 
         inspectorStack.addArrangedSubview(sectionLabel("LAUNCH MODE"))
         if launchModePopup.itemArray.isEmpty {
@@ -2027,6 +2038,34 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             serverStatusLabel.stringValue = "Ready to launch \(folder.lastPathComponent)"
         }
         rebuildInspector()
+    }
+
+    @objc private func openTerminalForSelectedProject() {
+        guard let projectFolder else { return }
+        guard let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+            presentError(
+                title: "Couldn’t open Terminal",
+                error: NSError(
+                    domain: "ViewDeck",
+                    code: 1001,
+                    userInfo: [NSLocalizedDescriptionKey: "Terminal.app could not be found."]
+                )
+            )
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(
+            [projectFolder],
+            withApplicationAt: terminalURL,
+            configuration: configuration
+        ) { [weak self] _, error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                self?.presentError(title: "Couldn’t open Terminal", error: error)
+            }
+        }
     }
 
     @objc private func launchModeChanged(_ sender: NSPopUpButton) {
