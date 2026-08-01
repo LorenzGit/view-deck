@@ -3,8 +3,12 @@ import XCTest
 @testable import ViewDeckCore
 
 final class QAScenarioTests: XCTestCase {
-    func testToolbarDefaultsToRecordingWithoutVideo() {
-        XCTAssertFalse(DeckToolbarModel().recordQAVideo)
+    func testToolbarDefaultsToIdleCaptureState() {
+        let model = DeckToolbarModel()
+
+        XCTAssertEqual(model.videoCaptureState, .idle)
+        XCTAssertFalse(model.isQARecordingReady)
+        XCTAssertFalse(model.isSidebarCollapsed)
     }
 
     func testKeyboardEventPreservesTimingAndEveryKeyboardField() throws {

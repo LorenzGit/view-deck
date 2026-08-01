@@ -103,19 +103,21 @@ dist/native/viewdeck record \
 
 Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-issues` for CI policies, and `viewdeck help` for the complete option list. JSON mode keeps ViewDeck's own result on stdout and writes development-server output to stderr.
 
-### Recorded QA scenarios
+### Test scenarios
 
-Use the labeled **Test Tools** card at the bottom of the device library, click **Record actions**, choose a `.viewdeck.json` destination, and interact with the page normally. Enable **Video capture** first when you also want a 30 FPS MP4; it is off by default so ordinary action recording stays lightweight. ViewDeck first clears site-scoped WebKit data and client storage, then reloads the page before timing begins so first-run experiences, tutorials, and cache-backed state start cleanly. It records pointer down/move/up, mouse clicks and drags, keyboard down/up (including code, modifiers, location, composition, and repeat), and form changes. Every event contains both its timestamp from the start of the run and the interval since the previous event. A derived `gestures` section classifies clicks/taps, drags, swipes, direction, distance, duration, sampled points, source event IDs, and the interval since the previous gesture.
+The **Test Tools** card separates one-off capture from repeatable test scenarios. Under **Capture**, **Screenshot** captures the current device and opens the markup editor, while **Record video** starts a standalone 30 FPS MP4 recording that runs until you click **Stop video**.
 
-While recording, click **Screenshot** to save a timestamped checkpoint PNG beside the actions JSON. Clicking **Stop & save** writes:
+Under **Test scenarios**, click **Record test**, choose a `.viewdeck.json` destination, optionally enable **Include an MP4 with this test recording**, and interact with the page normally. ViewDeck first clears site-scoped WebKit data and client storage, then reloads the page before timing begins so first-run experiences, tutorials, and cache-backed state start cleanly. It records pointer down/move/up, mouse clicks and drags, keyboard down/up (including code, modifiers, location, composition, and repeat), and form changes. Every event contains both its timestamp from the start of the run and the interval since the previous event. A derived `gestures` section classifies clicks/taps, drags, swipes, direction, distance, duration, sampled points, source event IDs, and the interval since the previous gesture.
+
+While recording, **Replay test** becomes **Add checkpoint**. Click it to save a timestamped checkpoint PNG beside the scenario, then click **Stop & save** to write:
 
 - The editable, versioned `.viewdeck.json` scenario.
-- A complete MP4 of the recording when **Video capture** was enabled.
+- A complete MP4 when **Include an MP4 with this test recording** was selected.
 - A timestamped PNG for every checkpoint.
 
 The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
 
-Click **Replay** below **Record actions** to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the Replay control becomes a **Stop** button; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
+Click **Replay test** to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the control becomes **Stop replay**; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
 
 When enabled in the interactive studio or a CLI replay using `--show-preview`, live video capture uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots. Hidden CLI runs use WebKit snapshot frames instead so recording does not require an on-screen window. Capture and H.264 encoding run away from the main UI thread at a video-appropriate resolution. If the machine cannot produce a frame on time, ViewDeck skips that slot instead of issuing a burst of catch-up captures that would compete with the tested page. Explicit screenshots and checkpoints continue to use the high-fidelity composited snapshot path.
 
@@ -159,6 +161,8 @@ For readiness that genuinely matters, add a `wait` event with a CSS `selector`, 
    - **Static HTML file** loads an HTML file with read access to neighboring assets.
    - **Custom command** runs a command in the selected project folder.
 5. Use **Stop process** to terminate the process and its child processes.
+
+Use the leading-sidebar button in the preview toolbar—or press Control-Command-S—to collapse or restore the entire Device Library panel. ViewDeck remembers both its visibility and its last expanded width.
 
 ViewDeck reads the exact local URL printed by tools such as Vite, including the selected port. It does not assume that a project uses port 5173.
 

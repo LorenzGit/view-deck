@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum DeckVideoCaptureState: Equatable {
+    case idle
+    case recording
+    case saving
+}
+
 final class DeckToolbarModel: ObservableObject {
     @Published var width = "440"
     @Published var height = "956"
@@ -7,14 +13,18 @@ final class DeckToolbarModel: ObservableObject {
     @Published var address = ""
     @Published var isCapturingScreenshot = false
     @Published var isQARecording = false
+    @Published var isQARecordingReady = false
     @Published var isQAReplaying = false
-    @Published var recordQAVideo = false
+    @Published var videoCaptureState = DeckVideoCaptureState.idle
     @Published var qaCheckpointCount = 0
+    @Published var isSidebarCollapsed = false
 
     var commitViewport: (Double, Double) -> Void = { _, _ in }
     var changeDPR: (Double) -> Void = { _ in }
+    var toggleSidebar: () -> Void = {}
     var rotate: () -> Void = {}
     var captureScreenshot: () -> Void = {}
+    var toggleVideoRecording: () -> Void = {}
     var toggleQARecording: () -> Void = {}
     var addQACheckpoint: () -> Void = {}
     var replayQAScenario: () -> Void = {}
@@ -47,6 +57,14 @@ struct DeckToolbarView: View {
     private var toolbarRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 0) {
+                browserIcon(
+                    "sidebar.left",
+                    help: model.isSidebarCollapsed ? "Show device library" : "Hide device library",
+                    action: model.toggleSidebar
+                )
+                Rectangle()
+                    .fill(ToolbarPalette.line)
+                    .frame(width: 1, height: 16)
                 browserIcon("chevron.left", help: "Back", action: model.back)
                 browserIcon("chevron.right", help: "Forward", action: model.forward)
                 browserIcon("arrow.clockwise", help: "Reload", action: model.reload)
@@ -93,6 +111,7 @@ struct DeckToolbarView: View {
         }
         .buttonStyle(DeckToolbarButtonStyle())
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -100,7 +119,7 @@ struct DeckQuickActionsView: View {
     @ObservedObject var model: DeckToolbarModel
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Text("TEST TOOLS")
                     .font(.system(size: 8.5, weight: .bold))
@@ -111,14 +130,13 @@ struct DeckQuickActionsView: View {
             }
 
             HStack(spacing: 5) {
-                actionButton(
+                utilityButton(
                     "arrow.triangle.2.circlepath",
                     title: "Rotate",
                     help: "Rotate device",
                     action: model.rotate
                 )
-                screenshotButton
-                actionButton(
+                utilityButton(
                     "wrench.and.screwdriver",
                     title: "Inspect",
                     help: "Open Web Inspector",
@@ -126,16 +144,13 @@ struct DeckQuickActionsView: View {
                 )
             }
 
-            Rectangle()
-                .fill(ToolbarPalette.line)
-                .frame(height: 1)
-
-            recordVideoToggle
-            actionRecordingButton
+            sectionLabel("CAPTURE")
+            captureControls
+            sectionLabel("TEST SCENARIOS")
             scenarioControls
         }
         .padding(9)
-        .frame(height: 228)
+        .frame(height: 252)
         .background(ToolbarPalette.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(ToolbarPalette.line))
         .environment(\.colorScheme, .dark)
@@ -160,212 +175,207 @@ struct DeckQuickActionsView: View {
     }
 
     private var activityTitle: String {
-        if model.isQARecording { return "RECORDING ACTIONS" }
-        if model.isQAReplaying { return "REPLAYING" }
+        if model.videoCaptureState == .recording { return "CAPTURING VIDEO" }
+        if model.videoCaptureState == .saving { return "SAVING VIDEO" }
+        if model.isQARecording {
+            return model.isQARecordingReady ? "RECORDING TEST" : "PREPARING TEST"
+        }
+        if model.isQAReplaying { return "REPLAYING TEST" }
         return "READY"
     }
 
     private var activityColor: Color {
-        if model.isQARecording { return .red }
+        if model.videoCaptureState == .recording || model.isQARecordingReady { return .red }
         if model.isQAReplaying { return ToolbarPalette.accent }
         return ToolbarPalette.secondary
     }
 
-    private var recordVideoToggle: some View {
-        HStack(spacing: 8) {
-            Image(systemName: model.recordQAVideo ? "video.fill" : "video")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(model.recordQAVideo ? ToolbarPalette.accent : ToolbarPalette.muted)
-                .frame(width: 22, height: 22)
-                .background(
-                    (model.recordQAVideo ? ToolbarPalette.accent.opacity(0.12) : Color.white.opacity(0.025)),
-                    in: RoundedRectangle(cornerRadius: 6)
-                )
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Video capture")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(ToolbarPalette.text)
-                    .lineLimit(1)
-                Text("MP4 · 30 FPS")
-                    .font(.system(size: 7.5, weight: .medium))
-                    .foregroundStyle(ToolbarPalette.muted)
-                    .lineLimit(1)
-            }
-            .accessibilityHidden(true)
-
-            Spacer(minLength: 2)
-
-            Toggle("", isOn: $model.recordQAVideo)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .accessibilityLabel("Include video capture")
+    private func sectionLabel(_ title: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 7.5, weight: .bold))
+                .tracking(0.55)
+                .foregroundStyle(ToolbarPalette.muted)
+            Rectangle()
+                .fill(ToolbarPalette.line)
+                .frame(height: 1)
         }
-        .padding(.horizontal, 7)
-        .frame(height: 38)
-        .background(
-            model.recordQAVideo ? ToolbarPalette.accent.opacity(0.055) : Color.white.opacity(0.018),
-            in: RoundedRectangle(cornerRadius: 8)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(model.recordQAVideo ? ToolbarPalette.accent.opacity(0.22) : ToolbarPalette.line)
-        )
-        .disabled(model.isQARecording || model.isQAReplaying)
-        .opacity(model.isQARecording || model.isQAReplaying ? 0.68 : 1)
-        .help("Include a performance-optimized 30 FPS MP4 with the actions recording")
     }
 
-    private var screenshotButton: some View {
-        Button(action: model.captureScreenshot) {
-            VStack(spacing: 2) {
-                if model.isCapturingScreenshot {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(ToolbarPalette.secondary)
-                } else {
-                    Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 10.5, weight: .semibold))
-                }
-                Text("Markup")
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(ToolbarPalette.secondary)
-            .frame(maxWidth: .infinity, minHeight: 38)
-            .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
+    private var captureControls: some View {
+        HStack(spacing: 5) {
+            labeledButton(
+                symbol: model.isCapturingScreenshot ? "hourglass" : "camera.viewfinder",
+                title: "Screenshot",
+                detail: model.isCapturingScreenshot ? "Capturing…" : "Capture + edit",
+                help: model.isCapturingScreenshot ? "Capturing device…" : "Capture and edit this device",
+                disabled: captureControlsDisabled || model.isCapturingScreenshot,
+                action: model.captureScreenshot
+            )
+            videoRecordingButton
         }
-        .buttonStyle(DeckToolbarButtonStyle())
-        .disabled(model.isCapturingScreenshot)
-        .help(model.isCapturingScreenshot ? "Capturing device…" : "Capture and mark up this device")
-        .accessibilityLabel(model.isCapturingScreenshot ? "Capturing device" : "Capture and mark up device")
     }
 
-    private var actionRecordingButton: some View {
-        Button(action: model.toggleQARecording) {
-            HStack(spacing: 7) {
-                Image(systemName: model.isQARecording ? "stop.fill" : "cursorarrow.click.2")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(model.isQARecording ? "Stop & save" : "Record actions")
-                        .font(.system(size: 9, weight: .bold))
-                        .lineLimit(1)
-                    Text(model.isQARecording ? "Finish actions JSON" : "Clicks, keys & forms")
-                        .font(.system(size: 7.5, weight: .medium))
-                        .foregroundStyle(model.isQARecording ? Color.white.opacity(0.78) : Color.red.opacity(0.72))
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 2)
-
-                Text("JSON")
-                    .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .frame(height: 18)
-                    .background(
-                        model.isQARecording ? Color.white.opacity(0.16) : Color.red.opacity(0.10),
-                        in: Capsule()
-                    )
-            }
-            .foregroundStyle(model.isQARecording ? Color.white : Color.red)
-            .padding(.horizontal, 9)
-            .frame(maxWidth: .infinity, minHeight: 38)
-            .background(
-                model.isQARecording ? Color.red : Color.red.opacity(0.08),
-                in: RoundedRectangle(cornerRadius: 8)
+    @ViewBuilder
+    private var videoRecordingButton: some View {
+        switch model.videoCaptureState {
+        case .idle:
+            labeledButton(
+                symbol: "video.fill",
+                title: "Record video",
+                detail: "MP4 · 30 FPS",
+                help: "Record the current device preview as an MP4",
+                disabled: model.isCapturingScreenshot || model.isQARecording || model.isQAReplaying,
+                action: model.toggleVideoRecording
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(model.isQARecording ? Color.red : Color.red.opacity(0.22))
+        case .recording:
+            labeledButton(
+                symbol: "stop.fill",
+                title: "Stop video",
+                detail: "Finish MP4",
+                help: "Stop and save the video recording",
+                foreground: .red,
+                background: Color.red.opacity(0.08),
+                border: Color.red.opacity(0.28),
+                action: model.toggleVideoRecording
+            )
+        case .saving:
+            labeledButton(
+                symbol: "hourglass",
+                title: "Saving video",
+                detail: "Finishing MP4",
+                help: "The video recording is being saved",
+                disabled: true,
+                action: {}
             )
         }
-        .buttonStyle(DeckToolbarButtonStyle())
-        .disabled(model.isQAReplaying)
-        .help(recordButtonHelp)
-        .accessibilityLabel(
-            model.isQARecording ? "Stop and save actions JSON" : "Record actions to JSON"
-        )
     }
 
     private var scenarioControls: some View {
         HStack(spacing: 5) {
-            Button(action: model.addQACheckpoint) {
-                HStack(spacing: 4) {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 9.5, weight: .semibold))
-                        if model.qaCheckpointCount > 0 {
-                            Text("\(model.qaCheckpointCount)")
-                                .font(.system(size: 6.5, weight: .bold))
-                                .padding(2)
-                                .background(ToolbarPalette.accent, in: Circle())
-                                .foregroundStyle(Color.black)
-                                .offset(x: 5, y: -5)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Screenshot")
-                            .font(.system(size: 8, weight: .semibold))
-                            .lineLimit(1)
-                        Text("Local PNG")
-                            .font(.system(size: 6.8, weight: .medium))
-                            .foregroundStyle(
-                                model.isQARecording
-                                    ? ToolbarPalette.accent.opacity(0.72)
-                                    : ToolbarPalette.muted.opacity(0.72)
-                            )
-                            .lineLimit(1)
-                    }
-                }
-                .foregroundStyle(model.isQARecording ? ToolbarPalette.accent : ToolbarPalette.muted)
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .background(Color.white.opacity(0.022), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
-            }
-            .buttonStyle(DeckToolbarButtonStyle())
-            .disabled(!model.isQARecording)
-            .help("Save a checkpoint PNG beside the actions JSON")
-            .accessibilityLabel("Save checkpoint screenshot locally as PNG")
-
-            Button(action: model.isQAReplaying ? model.stopQAReplay : model.replayQAScenario) {
-                HStack(spacing: 4) {
-                    Image(systemName: model.isQAReplaying ? "stop.fill" : "play.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text(model.isQAReplaying ? "Stop" : "Replay")
-                        .font(.system(size: 8, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(model.isQAReplaying ? Color.black : ToolbarPalette.secondary)
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .background(
-                    model.isQAReplaying ? ToolbarPalette.accent : Color.white.opacity(0.022),
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(
-                    model.isQAReplaying ? ToolbarPalette.accent : ToolbarPalette.line
-                ))
-            }
-            .buttonStyle(DeckToolbarButtonStyle())
-            .disabled(model.isQARecording)
-            .help(model.isQAReplaying ? "Stop QA replay" : "Replay a .viewdeck.json scenario")
-            .accessibilityLabel(model.isQAReplaying ? "Stop QA replay" : "Replay QA scenario")
+            labeledButton(
+                symbol: model.isQARecording ? "stop.fill" : "record.circle",
+                title: recordButtonTitle,
+                detail: recordButtonDetail,
+                help: recordButtonHelp,
+                foreground: model.isQARecordingReady ? .red : ToolbarPalette.secondary,
+                background: model.isQARecordingReady ? Color.red.opacity(0.08) : Color.white.opacity(0.022),
+                border: model.isQARecordingReady ? Color.red.opacity(0.28) : ToolbarPalette.line,
+                disabled: model.isQAReplaying || model.videoCaptureState != .idle,
+                action: model.toggleQARecording
+            )
+            scenarioSecondaryButton
         }
+    }
+
+    @ViewBuilder
+    private var scenarioSecondaryButton: some View {
+        if model.isQARecording {
+            labeledButton(
+                symbol: "camera.fill",
+                title: "Add checkpoint",
+                detail: checkpointDetail,
+                help: "Capture the current state as a checkpoint PNG",
+                foreground: ToolbarPalette.accent,
+                disabled: !model.isQARecordingReady,
+                action: model.addQACheckpoint
+            )
+        } else if model.isQAReplaying {
+            labeledButton(
+                symbol: "stop.fill",
+                title: "Stop replay",
+                detail: "Cancel playback",
+                help: "Stop the test replay",
+                foreground: Color.black,
+                background: ToolbarPalette.accent,
+                border: ToolbarPalette.accent,
+                action: model.stopQAReplay
+            )
+        } else {
+            labeledButton(
+                symbol: "play.fill",
+                title: "Replay test",
+                detail: "Choose scenario",
+                help: "Replay a .viewdeck.json test scenario",
+                disabled: model.videoCaptureState != .idle,
+                action: model.replayQAScenario
+            )
+        }
+    }
+
+    private var captureControlsDisabled: Bool {
+        model.videoCaptureState != .idle || model.isQARecording || model.isQAReplaying
+    }
+
+    private var checkpointDetail: String {
+        guard model.isQARecordingReady else { return "Preparing…" }
+        return model.qaCheckpointCount == 0
+            ? "Capture state"
+            : "\(model.qaCheckpointCount) saved"
+    }
+
+    private var recordButtonTitle: String {
+        guard model.isQARecording else { return "Record test" }
+        return model.isQARecordingReady ? "Stop & save" : "Cancel test"
+    }
+
+    private var recordButtonDetail: String {
+        guard model.isQARecording else { return "Actions + checkpoints" }
+        return model.isQARecordingReady ? "Finish scenario" : "Reloading page…"
     }
 
     private var recordButtonHelp: String {
-        if model.isQARecording {
-            return "Stop and save the recorded actions JSON"
+        guard model.isQARecording else {
+            return "Record actions and checkpoints to a test scenario"
         }
-        return model.recordQAVideo
-            ? "Record actions to JSON and include an MP4 video"
-            : "Record actions to JSON"
+        return model.isQARecordingReady
+            ? "Stop and save the test scenario"
+            : "Cancel the pending test recording"
     }
 
-    private func actionButton(
+    private func labeledButton(
+        symbol: String,
+        title: String,
+        detail: String,
+        help: String,
+        foreground: Color = ToolbarPalette.secondary,
+        background: Color = Color.white.opacity(0.022),
+        border: Color = ToolbarPalette.line,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 15)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(foreground)
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.system(size: 6.7, weight: .medium))
+                        .foregroundStyle(foreground.opacity(0.68))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .background(background, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(border))
+        }
+        .buttonStyle(DeckToolbarButtonStyle())
+        .disabled(disabled)
+        .opacity(disabled ? 0.62 : 1)
+        .help(help)
+        .accessibilityLabel("\(title). \(detail)")
+    }
+
+    private func utilityButton(
         _ symbol: String,
         title: String,
         help: String,
@@ -380,7 +390,7 @@ struct DeckQuickActionsView: View {
                     .lineLimit(1)
             }
             .foregroundStyle(ToolbarPalette.secondary)
-            .frame(maxWidth: .infinity, minHeight: 38)
+            .frame(maxWidth: .infinity, minHeight: 34)
             .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(ToolbarPalette.line))
         }

@@ -63,6 +63,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
+        let viewItem = NSMenuItem()
+        menu.addItem(viewItem)
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        let toggleSidebarItem = NSMenuItem(
+            title: "Toggle Device Library",
+            action: #selector(toggleSidebar(_:)),
+            keyEquivalent: "s"
+        )
+        toggleSidebarItem.keyEquivalentModifierMask = [.command, .control]
+        toggleSidebarItem.target = self
+        viewMenu.addItem(toggleSidebarItem)
+
         let windowItem = NSMenuItem()
         menu.addItem(windowItem)
         let windowMenu = NSMenu(title: "Window")
@@ -72,5 +85,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func toggleSidebar(_ sender: Any?) {
+        mainWindowController?.toggleSidebar()
     }
 }

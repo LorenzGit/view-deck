@@ -67,13 +67,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var footerPath: URL?
     private var leftPath: URL?
     private var rightPath: URL?
-    private let sidebarInitialWidth: CGFloat = 230
+    private let sidebarInitialWidth: CGFloat = 250
     private let inspectorInitialWidth: CGFloat = 320
-    private let sidebarMinimumWidth: CGFloat = 220
+    private let sidebarMinimumWidth: CGFloat = 250
     private let inspectorMinimumWidth: CGFloat = 260
     private let centerMinimumWidth: CGFloat = 520
     private var restoringSplitPositions = false
+    private var hasRestoredSplitPositions = false
+    private var sidebarMinimumWidthConstraint: NSLayoutConstraint?
     private var screenshotEditors: [ScreenshotEditorWindowController] = []
+    private var standaloneVideoRecorder: LivePreviewVideoRecorder?
     private var qaRecorder: QAScenarioRecorder?
     private var pendingQARecording: QARecordingRequest?
     private var qaPlayback: QAPlaybackController?
@@ -98,6 +101,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         var recorder: QAScenarioRecorder
         var targetURL: URL
         var captureVideo: Bool
+    }
+
+    private enum SplitPreferenceKey {
+        static let sidebarWidth = "viewdeck.native.sidebar-width"
+        static let inspectorWidth = "viewdeck.native.inspector-width"
+        static let sidebarCollapsed = "viewdeck.native.sidebar-collapsed"
     }
 
     private enum LocalLaunchMode: Int, CaseIterable {
@@ -159,7 +168,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     func stopServices() {
         localhostRefreshTimer?.invalidate()
         localhostRefreshTimer = nil
+        standaloneVideoRecorder?.stop()
         server.stop()
+    }
+
+    func toggleSidebar() {
+        setSidebarCollapsed(!sidebarIsCollapsed, persist: true)
     }
 
     private func buildInterface() {
@@ -186,6 +200,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        splitView.arrangesAllSubviews = false
         splitView.delegate = self
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.wantsLayer = true
@@ -212,8 +227,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 2)
 
+        let sidebarMinimumWidthConstraint = sidebar.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: sidebarMinimumWidth
+        )
+        self.sidebarMinimumWidthConstraint = sidebarMinimumWidthConstraint
         NSLayoutConstraint.activate([
-            sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: sidebarMinimumWidth),
+            sidebarMinimumWidthConstraint,
             sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 440),
             center.widthAnchor.constraint(greaterThanOrEqualToConstant: centerMinimumWidth),
             inspector.widthAnchor.constraint(greaterThanOrEqualToConstant: inspectorMinimumWidth),
@@ -301,7 +320,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             quickActions.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
             quickActions.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
             quickActions.bottomAnchor.constraint(equalTo: projectButton.topAnchor, constant: -8),
-            quickActions.heightAnchor.constraint(equalToConstant: 228),
+            quickActions.heightAnchor.constraint(equalToConstant: 252),
             projectButton.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10),
             projectButton.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
             projectButton.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -12),
@@ -342,8 +361,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             self.viewportChanged()
         }
         toolbarModel.changeDPR = { [weak self] value in self?.setDPR(value) }
+        toolbarModel.toggleSidebar = { [weak self] in self?.toggleSidebar() }
         toolbarModel.rotate = { [weak self] in self?.rotateDevice() }
         toolbarModel.captureScreenshot = { [weak self] in self?.captureScreenshot() }
+        toolbarModel.toggleVideoRecording = { [weak self] in self?.toggleVideoRecording() }
         toolbarModel.toggleQARecording = { [weak self] in self?.toggleQARecording() }
         toolbarModel.addQACheckpoint = { [weak self] in self?.addQACheckpoint() }
         toolbarModel.replayQAScenario = { [weak self] in self?.chooseAndReplayQAScenario() }
@@ -1052,25 +1073,77 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
     }
 
+    private func toggleVideoRecording() {
+        if let recorder = standaloneVideoRecorder {
+            guard toolbarModel.videoCaptureState == .recording else { return }
+            toolbarModel.videoCaptureState = .saving
+            recorder.stop()
+            return
+        }
+
+        guard canvas.preview.currentURL != nil else {
+            NSSound.beep()
+            presentInformation(
+                title: "Load a page first",
+                message: "ViewDeck needs a loaded page before it can record a video."
+            )
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Record device video"
+        panel.nameFieldStringValue = "viewdeck-capture.mp4"
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let outputURL = panel.url else { return }
+
+        let recorder = LivePreviewVideoRecorder(
+            outputURL: outputURL,
+            duration: nil,
+            framesPerSecond: 30,
+            captureScale: 1,
+            overwrite: true
+        )
+        standaloneVideoRecorder = recorder
+        toolbarModel.videoCaptureState = .recording
+        recorder.record(preview: canvas.preview) { [weak self, weak recorder] result in
+            guard let self, let recorder, self.standaloneVideoRecorder === recorder else { return }
+            self.standaloneVideoRecorder = nil
+            self.toolbarModel.videoCaptureState = .idle
+            switch result {
+            case .success:
+                self.presentInformation(
+                    title: "Video saved",
+                    message: "The device recording was saved as \(outputURL.lastPathComponent)."
+                )
+            case .failure(let error):
+                self.presentError(title: "Couldn’t save the video", error: error)
+            }
+        }
+    }
+
     private func toggleQARecording() {
+        guard standaloneVideoRecorder == nil else { return }
         if pendingQARecording != nil {
             pendingQARecording = nil
             toolbarModel.isQARecording = false
+            toolbarModel.isQARecordingReady = false
             return
         }
         if let recorder = qaRecorder {
             toolbarModel.isQARecording = false
+            toolbarModel.isQARecordingReady = false
             recorder.stop { [weak self] result in
                 guard let self else { return }
                 self.qaRecorder = nil
                 switch result {
                 case .success(let scenario):
                     self.presentInformation(
-                        title: "QA scenario saved",
+                        title: "Test scenario saved",
                         message: "\(scenario.events.count) input events, \(scenario.checkpoints.count) checkpoints, and the replay configuration were saved."
                     )
                 case .failure(let error):
-                    self.presentError(title: "Couldn’t save the QA scenario", error: error)
+                    self.presentError(title: "Couldn’t save the test scenario", error: error)
                 }
             }
             return
@@ -1085,10 +1158,18 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             return
         }
         let panel = NSSavePanel()
-        panel.title = "Record QA scenario"
+        panel.title = "Record test scenario"
         panel.nameFieldStringValue = "gameplay.viewdeck.json"
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
+        let includeVideo = NSButton(
+            checkboxWithTitle: "Include an MP4 with this test recording",
+            target: nil,
+            action: nil
+        )
+        includeVideo.state = .off
+        includeVideo.sizeToFit()
+        panel.accessoryView = includeVideo
         guard panel.runModal() == .OK, let outputURL = panel.url else { return }
 
         let source = currentQASourceConfiguration()
@@ -1112,10 +1193,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         pendingQARecording = QARecordingRequest(
             recorder: recorder,
             targetURL: targetURL,
-            captureVideo: toolbarModel.recordQAVideo
+            captureVideo: includeVideo.state == .on
         )
         toolbarModel.qaCheckpointCount = 0
         toolbarModel.isQARecording = true
+        toolbarModel.isQARecordingReady = false
         canvas.preview.reloadResettingSiteData()
     }
 
@@ -2253,6 +2335,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 self.pendingQARecording = nil
                 self.qaRecorder = recording.recorder
                 recording.recorder.start(captureVideo: recording.captureVideo)
+                self.toolbarModel.isQARecordingReady = true
             }
             if let replay = self.pendingQAReplay,
                self.replaySourceMatches(url, source: replay.scenario.source) {
@@ -2265,6 +2348,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         if pendingQARecording != nil {
             pendingQARecording = nil
             toolbarModel.isQARecording = false
+            toolbarModel.isQARecordingReady = false
         }
         devServerDidOutput(message, isError: true)
     }
@@ -2369,21 +2453,63 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private func restoreSplitPositions() {
         splitView.layoutSubtreeIfNeeded()
+        defer { hasRestoredSplitPositions = true }
         guard splitView.bounds.width > sidebarMinimumWidth + inspectorMinimumWidth + centerMinimumWidth else { return }
 
         let defaults = UserDefaults.standard
-        let savedSidebar = defaults.object(forKey: "viewdeck.native.sidebar-width") as? NSNumber
-        let savedInspector = defaults.object(forKey: "viewdeck.native.inspector-width") as? NSNumber
-        let sidebarWidth = min(440, max(sidebarMinimumWidth, CGFloat(savedSidebar?.doubleValue ?? Double(sidebarInitialWidth))))
+        let savedInspector = defaults.object(forKey: SplitPreferenceKey.inspectorWidth) as? NSNumber
         let inspectorWidth = min(640, max(inspectorMinimumWidth, CGFloat(savedInspector?.doubleValue ?? Double(inspectorInitialWidth))))
 
         restoringSplitPositions = true
-        splitView.setPosition(sidebarWidth, ofDividerAt: 0)
+        splitView.setPosition(preferredSidebarWidth, ofDividerAt: 0)
         splitView.setPosition(splitView.bounds.width - inspectorWidth - splitView.dividerThickness, ofDividerAt: 1)
+        setSidebarCollapsed(defaults.bool(forKey: SplitPreferenceKey.sidebarCollapsed), persist: false)
         restoringSplitPositions = false
     }
 
-    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+    private var preferredSidebarWidth: CGFloat {
+        let savedWidth = UserDefaults.standard.object(forKey: SplitPreferenceKey.sidebarWidth) as? NSNumber
+        return min(440, max(sidebarMinimumWidth, CGFloat(savedWidth?.doubleValue ?? Double(sidebarInitialWidth))))
+    }
+
+    private var sidebarIsCollapsed: Bool {
+        !splitView.arrangedSubviews.contains { $0 === sidebar }
+    }
+
+    private func setSidebarCollapsed(_ collapsed: Bool, persist: Bool) {
+        guard collapsed != sidebarIsCollapsed else {
+            toolbarModel.isSidebarCollapsed = collapsed
+            if persist {
+                UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.sidebarCollapsed)
+            }
+            return
+        }
+
+        if collapsed {
+            if sidebar.frame.width >= sidebarMinimumWidth {
+                UserDefaults.standard.set(Double(sidebar.frame.width), forKey: SplitPreferenceKey.sidebarWidth)
+            }
+            sidebarMinimumWidthConstraint?.isActive = false
+            sidebar.isHidden = true
+            splitView.removeArrangedSubview(sidebar)
+            splitView.adjustSubviews()
+        } else {
+            sidebar.isHidden = false
+            splitView.insertArrangedSubview(sidebar, at: 0)
+            sidebarMinimumWidthConstraint?.isActive = true
+            splitView.adjustSubviews()
+            splitView.setPosition(preferredSidebarWidth, ofDividerAt: 0)
+        }
+
+        toolbarModel.isSidebarCollapsed = collapsed
+        if persist {
+            UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.sidebarCollapsed)
+        }
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        false
+    }
 
     func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
         view === center
@@ -2394,8 +2520,13 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         constrainMinCoordinate proposedMinimumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        if dividerIndex == 0 { return max(sidebarMinimumWidth, proposedMinimumPosition) }
-        let minimumCenterEdge = sidebar.frame.maxX + splitView.dividerThickness + centerMinimumWidth
+        if !sidebarIsCollapsed, dividerIndex == 0 {
+            return max(sidebarMinimumWidth, proposedMinimumPosition)
+        }
+        let centerLeadingEdge = sidebarIsCollapsed
+            ? splitView.bounds.minX
+            : sidebar.frame.maxX + splitView.dividerThickness
+        let minimumCenterEdge = centerLeadingEdge + centerMinimumWidth
         return max(minimumCenterEdge, proposedMinimumPosition)
     }
 
@@ -2404,7 +2535,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         constrainMaxCoordinate proposedMaximumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        if dividerIndex == 1 {
+        let inspectorDividerIndex = sidebarIsCollapsed ? 0 : 1
+        if dividerIndex == inspectorDividerIndex {
             return min(splitView.bounds.width - inspectorMinimumWidth - splitView.dividerThickness, proposedMaximumPosition)
         }
         let maximumSidebarEdge = inspector.frame.minX - splitView.dividerThickness - centerMinimumWidth
@@ -2412,9 +2544,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        guard !restoringSplitPositions, sidebar.frame.width >= sidebarMinimumWidth, inspector.frame.width >= inspectorMinimumWidth else { return }
-        UserDefaults.standard.set(Double(sidebar.frame.width), forKey: "viewdeck.native.sidebar-width")
-        UserDefaults.standard.set(Double(inspector.frame.width), forKey: "viewdeck.native.inspector-width")
+        let collapsed = sidebarIsCollapsed
+        toolbarModel.isSidebarCollapsed = collapsed
+        guard hasRestoredSplitPositions, !restoringSplitPositions else { return }
+
+        UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.sidebarCollapsed)
+        guard !collapsed,
+              sidebar.frame.width >= sidebarMinimumWidth,
+              inspector.frame.width >= inspectorMinimumWidth else { return }
+        UserDefaults.standard.set(Double(sidebar.frame.width), forKey: SplitPreferenceKey.sidebarWidth)
+        UserDefaults.standard.set(Double(inspector.frame.width), forKey: SplitPreferenceKey.inspectorWidth)
     }
 
     private func styleButton(_ button: NSButton, fill: NSColor, border: NSColor, text: NSColor, radius: CGFloat) {
