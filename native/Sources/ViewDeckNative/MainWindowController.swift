@@ -23,6 +23,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var devices: [DeviceProfile] { BuiltinDevices.all + customDevices }
     private var selectedIndex = 0
     private var selectedDevice: DeviceProfile { devices[selectedIndex] }
+    private let preferences: ViewDeckPreferences
 
     private let splitView = NSSplitView()
     private let sidebar = FlippedView()
@@ -116,10 +117,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     let canvas: PreviewCanvasView
 
     init() {
-        let selectedID = UserDefaults.standard.string(forKey: "viewdeck.native.selected-device")
+        let preferences = ViewDeckPreferences()
+        self.preferences = preferences
+        let selectedID = preferences.selectedDeviceID
         let initialDevices = BuiltinDevices.all + DeviceStore.load()
         selectedIndex = initialDevices.firstIndex(where: { $0.id == selectedID }) ?? 0
-        canvas = PreviewCanvasView(profile: initialDevices[selectedIndex])
+        let canvas = PreviewCanvasView(profile: initialDevices[selectedIndex])
+        canvas.preview.landscape = preferences.isLandscape
+        self.canvas = canvas
 
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 1480, height: 920),
@@ -141,6 +146,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         configureToolbarModel()
         buildInterface()
         selectDevice(at: selectedIndex)
+        restoreSavedProjectFolder()
 
         let savedAddress = UserDefaults.standard.string(forKey: "viewdeck.native.last-url") ?? "http://localhost:5173"
         addressField.stringValue = savedAddress
@@ -354,7 +360,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func buildInspector() {
-        inspectorTabs.selectedSegment = 0
+        inspectorTabs.selectedSegment = preferences.inspectorTabIndex(segmentCount: inspectorTabs.segmentCount)
         inspectorTabs.selectionChanged = { [weak self] in
             self?.rebuildInspector()
             self?.updateLocalhostMonitoring()
@@ -932,13 +938,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         selectedIndex = index
         let device = devices[index]
         canvas.preview.profile = device
-        canvas.preview.landscape = false
         widthField.doubleValue = device.viewport.width
         heightField.doubleValue = device.viewport.height
         toolbarModel.width = Int(device.viewport.width).description
         toolbarModel.height = Int(device.viewport.height).description
         toolbarModel.dpr = device.viewport.dpr
-        UserDefaults.standard.set(device.id, forKey: "viewdeck.native.selected-device")
+        preferences.selectedDeviceID = device.id
         refreshDeviceLists()
         updateStatus()
         rebuildInspector()
@@ -993,6 +998,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func rotateDevice() {
         canvas.preview.landscape.toggle()
+        preferences.isLandscape = canvas.preview.landscape
         updateStatus(); rebuildInspector()
     }
 
@@ -1256,6 +1262,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         canvas.preview.profile = configuration.profile
         canvas.preview.safeArea = configuration.safeArea.configuredPortrait
         canvas.preview.landscape = configuration.orientation == "landscape"
+        preferences.isLandscape = canvas.preview.landscape
         canvas.preview.showSafeArea = configuration.safeArea.guideVisible
         canvas.preview.applySafeAreaToPage = configuration.safeArea.forcedIntoPageLayout
 
@@ -1571,6 +1578,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func inspectorTabChanged() {
+        preferences.inspectorTabIndex = inspectorTabs.selectedSegment
         rebuildInspector()
         updateLocalhostMonitoring()
     }
@@ -2012,11 +2020,22 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let folder = panel.url else { return }
-        if projectFolder?.standardizedFileURL != folder.standardizedFileURL {
+        setProjectFolder(folder)
+    }
+
+    private func restoreSavedProjectFolder() {
+        guard let folder = preferences.projectFolderURL else { return }
+        setProjectFolder(folder, persist: false)
+    }
+
+    private func setProjectFolder(_ folder: URL, persist: Bool = true) {
+        let folder = folder.standardizedFileURL
+        if projectFolder?.standardizedFileURL != folder {
             pendingServerPreviewIdentity = nil
             if server.state == .running || server.state == .starting { server.stop() }
         }
         projectFolder = folder
+        if persist { preferences.projectFolderURL = folder }
         projectButton.title = folder.lastPathComponent
         projectButton.toolTip = "Project folder: \(folder.path)"
         styleButton(projectButton, fill: DeckTheme.card, border: DeckTheme.lineStrong, text: DeckTheme.secondaryText, radius: 10)
@@ -2091,7 +2110,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.directoryURL = projectFolder
         guard panel.runModal() == .OK, let file = panel.url else { return }
         staticHTMLFile = file
-        projectFolder = file.deletingLastPathComponent()
+        projectFolder = file.deletingLastPathComponent().standardizedFileURL
+        preferences.projectFolderURL = projectFolder
         projectButton.title = projectFolder?.lastPathComponent ?? "Choose local project"
         previewStaticHTML(file)
         rebuildInspector()

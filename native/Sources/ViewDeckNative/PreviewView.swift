@@ -699,6 +699,166 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+
+    /// Export GPU canvas pixels via JS, inject as an <img> under the DOM, then WebKit-snapshot.
+    /// Painting the readback in-page preserves HUD z-order (full-screen canvas overlays wiped it).
+    func captureScreenshotWithCanvasReadback(
+        scale requestedScale: CGFloat? = nil,
+        completion: @escaping (Result<NSImage, Error>) -> Void
+    ) {
+        let captureScale = min(3, max(0.5, requestedScale ?? profile.viewport.dpr))
+        evaluateJavaScript(Self.canvasInjectReadbackScript) { [weak self] injectResult in
+            guard let self else { return }
+            let injected: Bool = {
+                guard case .success(let value) = injectResult,
+                      let encoded = value as? String,
+                      let data = encoded.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      object["ok"] as? Bool == true
+                else { return false }
+                return true
+            }()
+
+            self.captureScreenshot(scale: captureScale) { [weak self] snapResult in
+                guard let self else { return }
+                self.evaluateJavaScript(Self.canvasCleanupReadbackScript) { _ in
+                    switch snapResult {
+                    case .failure(let error):
+                        completion(.failure(error))
+                    case .success(let image):
+                        // If inject failed we still return the plain snapshot (DOM + blank GPU).
+                        _ = injected
+                        completion(.success(image))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read canvas (game hook → toDataURL → 2D drawImage), hide the live canvas, show a PNG <img>.
+    private static let canvasInjectReadbackScript = """
+    (async function () {
+      try {
+        document.getElementById('__viewdeck_canvas_capture')?.remove();
+        const canvas = document.querySelector('canvas');
+        if (!canvas) return JSON.stringify({ error: 'no-canvas', ok: false });
+        const rect = canvas.getBoundingClientRect();
+        let dataUrl = null;
+        let source = null;
+        if (typeof window.__viewdeckCaptureCanvas === 'function') {
+          try {
+            const result = window.__viewdeckCaptureCanvas();
+            dataUrl = (result && typeof result.then === 'function') ? await result : result;
+            if (dataUrl && typeof dataUrl === 'string' && dataUrl.length > 64) source = 'hook';
+          } catch (e) {}
+        }
+        if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.length < 64) {
+          try {
+            dataUrl = canvas.toDataURL('image/png');
+            if (dataUrl && dataUrl.length > 64) source = 'toDataURL';
+          } catch (e) {}
+        }
+        if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.length < 64) {
+          try {
+            const c2 = document.createElement('canvas');
+            c2.width = canvas.width || Math.max(1, Math.round(rect.width * (window.devicePixelRatio || 1)));
+            c2.height = canvas.height || Math.max(1, Math.round(rect.height * (window.devicePixelRatio || 1)));
+            const ctx = c2.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(canvas, 0, 0);
+              dataUrl = c2.toDataURL('image/png');
+              if (dataUrl && dataUrl.length > 64) source = 'drawImage';
+            }
+          } catch (e) {}
+        }
+        if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.length < 64) {
+          return JSON.stringify({
+            error: 'empty-canvas',
+            ok: false,
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height
+          });
+        }
+        const img = document.createElement('img');
+        img.id = '__viewdeck_canvas_capture';
+        img.alt = '';
+        img.src = dataUrl;
+        img.setAttribute('data-viewdeck-source', source || 'unknown');
+        // Sit in the canvas parent so later DOM HUD siblings still paint on top.
+        const parent = canvas.parentElement || document.body;
+        const parentStyle = window.getComputedStyle(parent);
+        if (parentStyle.position === 'static') {
+          if (!parent.dataset.viewdeckPrevPosition) {
+            parent.dataset.viewdeckPrevPosition = parent.style.position || '';
+          }
+          parent.style.position = 'relative';
+        }
+        // Full-bleed over the canvas host. Source PNG must share the canvas CSS
+        // aspect (see game __viewdeckCaptureCanvas); fill then matches live layout.
+        img.style.cssText = [
+          'position:absolute',
+          'left:0',
+          'top:0',
+          'width:100%',
+          'height:100%',
+          'margin:0',
+          'padding:0',
+          'border:0',
+          'display:block',
+          'pointer-events:none',
+          'z-index:0',
+          'object-fit:fill'
+        ].join(';');
+        if (!canvas.dataset.viewdeckPrevVisibility) {
+          canvas.dataset.viewdeckPrevVisibility = canvas.style.visibility || '';
+        }
+        if (!canvas.dataset.viewdeckPrevPosition) {
+          canvas.dataset.viewdeckPrevPosition = canvas.style.position || '';
+        }
+        canvas.style.visibility = 'hidden';
+        canvas.style.position = canvas.style.position || 'absolute';
+        parent.insertBefore(img, canvas);
+        await new Promise(function (resolve) {
+          if (img.complete) resolve();
+          else { img.onload = function () { resolve(); }; img.onerror = function () { resolve(); }; }
+        });
+        return JSON.stringify({
+          ok: true,
+          source: source,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          dpr: window.devicePixelRatio || 1,
+          bytes: dataUrl.length
+        });
+      } catch (e) {
+        return JSON.stringify({ error: String(e), ok: false });
+      }
+    })()
+    """
+
+    private static let canvasCleanupReadbackScript = """
+    (function () {
+      document.getElementById('__viewdeck_canvas_capture')?.remove();
+      document.querySelectorAll('canvas').forEach(function (canvas) {
+        if (Object.prototype.hasOwnProperty.call(canvas.dataset, 'viewdeckPrevVisibility')) {
+          canvas.style.visibility = canvas.dataset.viewdeckPrevVisibility;
+          delete canvas.dataset.viewdeckPrevVisibility;
+        }
+        if (Object.prototype.hasOwnProperty.call(canvas.dataset, 'viewdeckPrevPosition')) {
+          canvas.style.position = canvas.dataset.viewdeckPrevPosition;
+          delete canvas.dataset.viewdeckPrevPosition;
+        }
+        const parent = canvas.parentElement;
+        if (parent && Object.prototype.hasOwnProperty.call(parent.dataset, 'viewdeckPrevPosition')) {
+          parent.style.position = parent.dataset.viewdeckPrevPosition;
+          delete parent.dataset.viewdeckPrevPosition;
+        }
+      });
+      return true;
+    })()
+    """
+
     func captureScreenshot(
         scale requestedScale: CGFloat? = nil,
         completion: @escaping (Result<NSImage, Error>) -> Void

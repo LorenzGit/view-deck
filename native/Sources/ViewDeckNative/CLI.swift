@@ -1253,7 +1253,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             inspectPage()
             return
         }
-        preview.captureScreenshot(scale: invocation.captureScale) { [weak self] result in
+        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
@@ -1377,7 +1377,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
         [
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
-            "captureBackend": "webkitSnapshot"
+            "captureBackend": "webkitSnapshotPlusCanvasReadback"
         ]
     }
 
@@ -1668,7 +1668,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             completion()
             return
         }
-        preview.captureScreenshot(scale: invocation.captureScale) { [weak self] result in
+        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
             guard let self else {
                 completion()
                 return
@@ -1695,7 +1695,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             inspectPage()
             return
         }
-        preview.captureScreenshot(scale: invocation.captureScale) { [weak self] result in
+        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
@@ -1804,7 +1804,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         [
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
-            "captureBackend": invocation.showPreview ? "windowCompositor" : "webkitSnapshot"
+            "captureBackend": invocation.showPreview ? "windowCompositor" : "webkitSnapshotPlusCanvasReadback"
         ]
     }
 
@@ -1876,7 +1876,7 @@ private final class PreviewVideoRecorder {
         preview: DevicePreviewView,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        preview.captureScreenshot(scale: captureScale) { [weak self] result in
+        preview.captureScreenshotWithCanvasReadback(scale: captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
