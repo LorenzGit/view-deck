@@ -1,7 +1,14 @@
 import SwiftUI
 
+struct DeviceEditorLayerOption: Identifiable, Equatable {
+    let id: String
+    let title: String
+}
+
 final class DeviceEditorModel: ObservableObject {
-    private let seed: DeviceProfile
+    static let noLayerID = "none"
+
+    private let seed: CustomDeviceSetup
 
     @Published var name: String
     @Published var platform: String
@@ -23,9 +30,19 @@ final class DeviceEditorModel: ObservableObject {
     @Published var sensorTop: String
     @Published var safariChrome: Bool
     @Published var homeIndicator: Bool
+    @Published var landscape: Bool
+    @Published var headerLayerID: String
+    @Published var footerLayerID: String
+    @Published var leftLayerID: String
+    @Published var rightLayerID: String
+    @Published var headerExtent: String
+    @Published var footerExtent: String
+    @Published var leftExtent: String
+    @Published var rightExtent: String
 
-    init(profile: DeviceProfile) {
-        seed = profile
+    init(setup: CustomDeviceSetup) {
+        seed = setup
+        let profile = setup.profile
         name = profile.name
         platform = profile.platform.rawValue
         viewportWidth = profile.viewport.width.formatted()
@@ -46,10 +63,19 @@ final class DeviceEditorModel: ObservableObject {
         sensorTop = profile.sensor.top.formatted()
         safariChrome = profile.safariChrome
         homeIndicator = profile.homeIndicator
+        landscape = setup.landscape
+        headerLayerID = setup.header.identifier ?? Self.noLayerID
+        footerLayerID = setup.footer.identifier ?? Self.noLayerID
+        leftLayerID = setup.left.identifier ?? Self.noLayerID
+        rightLayerID = setup.right.identifier ?? Self.noLayerID
+        headerExtent = setup.header.extent.formatted()
+        footerExtent = setup.footer.extent.formatted()
+        leftExtent = setup.left.extent.formatted()
+        rightExtent = setup.right.extent.formatted()
     }
 
-    func makeProfile() -> DeviceProfile {
-        var profile = seed
+    func makeSetup() -> CustomDeviceSetup {
+        var profile = seed.profile
         profile.name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Custom device" : name
         profile.platform = DevicePlatform(rawValue: platform) ?? .custom
         profile.viewport = Viewport(
@@ -79,17 +105,37 @@ final class DeviceEditorModel: ObservableObject {
         profile.safariChrome = safariChrome
         profile.homeIndicator = homeIndicator
         profile.builtin = false
-        return profile
+        return CustomDeviceSetup(
+            id: seed.id,
+            profile: profile,
+            landscape: landscape,
+            header: layerSelection(identifier: headerLayerID, extent: headerExtent, kind: .header),
+            footer: layerSelection(identifier: footerLayerID, extent: footerExtent, kind: .footer),
+            left: layerSelection(identifier: leftLayerID, extent: leftExtent, kind: .left),
+            right: layerSelection(identifier: rightLayerID, extent: rightExtent, kind: .right)
+        )
     }
 
-    private func number(_ value: String) -> CGFloat {
-        CGFloat(Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0)
+    private func layerSelection(
+        identifier: String,
+        extent: String,
+        kind: HTMLLayerKind
+    ) -> CustomDeviceLayerSelection {
+        CustomDeviceLayerSelection(
+            identifier: identifier == Self.noLayerID ? nil : identifier,
+            extent: max(20, number(extent, fallback: kind.defaultExtent))
+        )
+    }
+
+    private func number(_ value: String, fallback: CGFloat = 0) -> CGFloat {
+        CGFloat(Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) ?? Double(fallback))
     }
 }
 
 struct DeviceEditorView: View {
     @ObservedObject var model: DeviceEditorModel
     let editing: Bool
+    let layerOptions: [HTMLLayerKind: [DeviceEditorLayerOption]]
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -162,6 +208,41 @@ struct DeviceEditorView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(text)
                     }
+
+                    section("CUSTOM SETUP") {
+                        VStack(spacing: 10) {
+                            Toggle("Landscape orientation", isOn: $model.landscape)
+                                .toggleStyle(.switch)
+                                .help("Restore this custom device in landscape orientation")
+                            Divider().overlay(line)
+                            layerMenuRow(
+                                "Header layer",
+                                selection: $model.headerLayerID,
+                                kind: .header,
+                                extent: $model.headerExtent
+                            )
+                            layerMenuRow(
+                                "Footer layer",
+                                selection: $model.footerLayerID,
+                                kind: .footer,
+                                extent: $model.footerExtent
+                            )
+                            layerMenuRow(
+                                "Left landscape layer",
+                                selection: $model.leftLayerID,
+                                kind: .left,
+                                extent: $model.leftExtent
+                            )
+                            layerMenuRow(
+                                "Right landscape layer",
+                                selection: $model.rightLayerID,
+                                kind: .right,
+                                extent: $model.rightExtent
+                            )
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(text)
+                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.vertical, 18)
@@ -185,10 +266,10 @@ struct DeviceEditorView: View {
                 .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(0.28)))
             VStack(alignment: .leading, spacing: 3) {
-                Text(editing ? "Edit device skin" : "Add device skin")
+                Text(editing ? "Edit custom device" : "Add custom device")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(text)
-                Text("Define the viewport, shell, sensors, and safe-area geometry.")
+                Text("Save device geometry, orientation, and page layers as one setup.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(muted)
             }
@@ -207,13 +288,13 @@ struct DeviceEditorView: View {
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(EditorSecondaryButtonStyle())
-                .help("Close without saving this device")
+                .help("Close without saving this custom device")
             Button(action: onSave) {
-                Label("Save device", systemImage: "checkmark")
+                Label("Save custom device", systemImage: "checkmark")
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(EditorPrimaryButtonStyle())
-            .help("Save this device to the device library")
+            .help("Save this setup to the Custom tab")
         }
         .padding(.horizontal, 22)
         .frame(height: 64)
@@ -278,6 +359,46 @@ struct DeviceEditorView: View {
             .pickerStyle(.menu)
             .frame(width: 190)
             .help("Choose \(title.lowercased())")
+        }
+    }
+
+    private func layerMenuRow(
+        _ title: String,
+        selection: Binding<String>,
+        kind: HTMLLayerKind,
+        extent: Binding<String>
+    ) -> some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(secondary)
+                Spacer()
+                Picker("", selection: selection) {
+                    ForEach(layerOptions[kind] ?? []) { option in
+                        Text(option.title).tag(option.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 190)
+                .help("Choose \(title.lowercased())")
+            }
+            HStack {
+                Text("Reserved \(kind.reservedDimension)")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(muted)
+                Spacer()
+                TextField("0", text: extent)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(text)
+                    .padding(.horizontal, 10)
+                    .frame(width: 92, height: 32)
+                    .background(field, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(line))
+                    .help("Edit the layer's reserved \(kind.reservedDimension)")
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Native AppKit interface with Apple WebKit rendering.
 - Built-in iPhone 17 Pro Max and iPhone 16 Pro browser/app profiles, plus iPad, Android-sized, and desktop profiles.
 - Phone and tablet profiles expose touch-style input capabilities to page JavaScript and CSS, including coarse-pointer and no-hover media queries.
-- Custom device skins with editable viewport, shell, sensor, corner-radius, and DPR values.
+- Custom device setups with editable viewport, shell, sensor, corner-radius, DPR, orientation, and layer selections.
 - Safe-area visualization, CSS variables, and optional page-padding injection.
 - Optional reusable HTML header, footer, and landscape-only side rail layers.
 - WebGL and WebGPU content through `WKWebView` when supported by the host Mac.
@@ -180,7 +180,7 @@ For readiness that genuinely matters, add a `wait` event with a CSS `selector`, 
    - **NPM script** discovers scripts in `package.json` and runs the selected script.
    - **Static HTML file** loads an HTML file with read access to neighboring assets.
    - **Custom command** runs a command in the selected project folder.
-5. Use **Stop process** to terminate the process and its child processes.
+5. Use **Stop process** to terminate the process and its child processes. While a managed process is active, the same red stop control appears in the preview toolbar; stopping it returns the device to the empty **Native WebKit preview** screen.
 
 Use the leading-sidebar button in the preview toolbar—or press Control-Command-S—to collapse or restore the entire Device Library panel. ViewDeck remembers both its visibility and its last expanded width.
 
@@ -204,7 +204,7 @@ The proxy provides deterministic application-level conditions rather than radio 
 
 ## Device profiles and safe areas
 
-The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. Duplicate a built-in profile to create an editable custom skin.
+The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. In the **Device** panel, choose **Add to custom devices** to save the current geometry together with its portrait/landscape orientation and header, footer, left, and right layer selections. Saved setups appear in the sidebar's **Custom** tab, where they can be applied, edited, or removed. Existing custom skins are migrated automatically as portrait setups with no selected layers.
 
 ViewDeck exposes the selected safe-area values to the page:
 

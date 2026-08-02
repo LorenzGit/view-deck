@@ -179,21 +179,6 @@ enum BuiltinDevices {
             builtin: true
         )
     ]
-
-    static var customTemplate: DeviceProfile {
-        DeviceProfile(
-            id: UUID().uuidString,
-            name: "Custom phone",
-            platform: .custom,
-            viewport: Viewport(width: 390, height: 844, dpr: 3),
-            shell: DeviceShell(top: 10, right: 10, bottom: 10, left: 10, radius: 48),
-            safeArea: EdgeInsets(top: 47, right: 0, bottom: 34, left: 0),
-            sensor: DeviceSensor(type: .island, width: 118, height: 34, top: 10),
-            safariChrome: false,
-            homeIndicator: true,
-            builtin: false
-        )
-    }
 }
 
 enum SafeAreaGeometry {
@@ -360,21 +345,6 @@ enum PreviewMetrics {
     }
 }
 
-enum DeviceStore {
-    private static let key = "viewdeck.native.custom-devices"
-    private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
-
-    static func load() -> [DeviceProfile] {
-        guard let data = defaults.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([DeviceProfile].self, from: data)) ?? []
-    }
-
-    static func save(_ devices: [DeviceProfile]) {
-        guard let data = try? JSONEncoder().encode(devices) else { return }
-        defaults.set(data, forKey: key)
-    }
-}
-
 enum HTMLLayerKind: String, Codable, CaseIterable {
     case header
     case footer
@@ -447,6 +417,87 @@ enum HTMLLayerStore {
             migrated.path = replacementURL.path
         }
         return migrated
+    }
+}
+
+struct CustomDeviceLayerSelection: Codable, Equatable {
+    var identifier: String?
+    var extent: CGFloat
+
+    static func none(_ kind: HTMLLayerKind) -> CustomDeviceLayerSelection {
+        CustomDeviceLayerSelection(identifier: nil, extent: kind.defaultExtent)
+    }
+}
+
+struct CustomDeviceSetup: Codable, Equatable, Identifiable {
+    var id: String
+    var profile: DeviceProfile
+    var landscape: Bool
+    var header: CustomDeviceLayerSelection
+    var footer: CustomDeviceLayerSelection
+    var left: CustomDeviceLayerSelection
+    var right: CustomDeviceLayerSelection
+
+    init(
+        id: String,
+        profile: DeviceProfile,
+        landscape: Bool,
+        header: CustomDeviceLayerSelection = .none(.header),
+        footer: CustomDeviceLayerSelection = .none(.footer),
+        left: CustomDeviceLayerSelection = .none(.left),
+        right: CustomDeviceLayerSelection = .none(.right)
+    ) {
+        self.id = id
+        self.profile = profile
+        self.landscape = landscape
+        self.header = header
+        self.footer = footer
+        self.left = left
+        self.right = right
+    }
+
+    init(migrating profile: DeviceProfile) {
+        self.init(id: profile.id, profile: profile, landscape: false)
+    }
+
+    func layer(_ kind: HTMLLayerKind) -> CustomDeviceLayerSelection {
+        switch kind {
+        case .header: header
+        case .footer: footer
+        case .left: left
+        case .right: right
+        }
+    }
+}
+
+enum CustomDeviceSetupStore {
+    private static let key = "viewdeck.native.custom-devices"
+    private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
+
+    static func load() -> [CustomDeviceSetup] {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        if let setups = try? JSONDecoder().decode([CustomDeviceSetup].self, from: data) {
+            return setups
+        }
+        guard let profiles = try? JSONDecoder().decode([DeviceProfile].self, from: data) else {
+            return []
+        }
+        let migrated = profiles.map(CustomDeviceSetup.init(migrating:))
+        save(migrated)
+        return migrated
+    }
+
+    static func save(_ setups: [CustomDeviceSetup]) {
+        guard let data = try? JSONEncoder().encode(setups) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    static func decode(_ data: Data) -> [CustomDeviceSetup] {
+        if let setups = try? JSONDecoder().decode([CustomDeviceSetup].self, from: data) {
+            return setups
+        }
+        let profiles = (try? JSONDecoder().decode([DeviceProfile].self, from: data)) ?? []
+        return profiles.map(CustomDeviceSetup.init(migrating:))
     }
 }
 

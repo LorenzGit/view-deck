@@ -156,6 +156,59 @@ final class PreviewMetricsTests: XCTestCase {
         XCTAssertEqual(page.obscuredContentInsets.bottom, 0)
     }
 
+    func testEmptyStateReplacesTheCurrentPageWithTheNativePreviewPlaceholder() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckEmptyState-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = directory.appendingPathComponent("index.html")
+        try "<!doctype html><title>Running preview</title><p>Server content</p>"
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let restored = expectation(description: "empty preview placeholder loads")
+        var retainedPreview: DevicePreviewView?
+        var retainedProbe: PreviewNavigationProbe?
+        var loadedFixture = false
+
+        DispatchQueue.main.async {
+            let preview = DevicePreviewView(profile: BuiltinDevices.all[1])
+            let probe = PreviewNavigationProbe()
+            retainedPreview = preview
+            retainedProbe = probe
+            preview.delegate = probe
+
+            probe.didFinish = { _, url in
+                if url?.standardizedFileURL == file.standardizedFileURL {
+                    loadedFixture = true
+                    preview.showEmptyState()
+                    return
+                }
+                guard loadedFixture, url == nil else { return }
+                preview.evaluateJavaScript("document.body.innerText") { result in
+                    do {
+                        let body = try result.get() as? String
+                        XCTAssertTrue(body?.contains("Native WebKit preview") == true)
+                        XCTAssertNil(preview.currentURL)
+                    } catch {
+                        XCTFail("Could not inspect the empty preview: \(error)")
+                    }
+                    restored.fulfill()
+                }
+            }
+            probe.didFail = { message in
+                XCTFail("Preview failed while restoring the empty state: \(message)")
+                restored.fulfill()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                preview.loadLocalFile(file)
+            }
+        }
+
+        wait(for: [restored], timeout: 5)
+        withExtendedLifetime((retainedPreview, retainedProbe)) {}
+    }
+
     func testHeaderMakesAnEmbeddedRuntimeTreatZeroTopInsetAsAuthoritative() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ViewDeckHeaderRuntime-\(UUID().uuidString)", isDirectory: true)

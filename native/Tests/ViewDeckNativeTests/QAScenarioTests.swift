@@ -9,6 +9,7 @@ final class QAScenarioTests: XCTestCase {
         XCTAssertEqual(model.videoCaptureState, .idle)
         XCTAssertFalse(model.isQARecordingReady)
         XCTAssertFalse(model.isSidebarCollapsed)
+        XCTAssertEqual(model.localProcessState, .idle)
     }
 
     func testKeyboardEventPreservesTimingAndEveryKeyboardField() throws {

@@ -137,7 +137,7 @@ public enum ViewDeckCommand {
 
     private static func writeQATemplate(_ invocation: CLIInvocation) throws -> Int32 {
         let manager = FileManager.default
-        let devices = BuiltinDevices.all + DeviceStore.load()
+        let devices = BuiltinDevices.all + CustomDeviceSetupStore.load().map(\.profile)
         guard let device = devices.first(where: { $0.id == invocation.deviceID }) else {
             throw CLIError.unknownDevice(invocation.deviceID)
         }
@@ -481,7 +481,7 @@ public enum ViewDeckCommand {
     }
 
     private static func printDevices(json: Bool) throws {
-        let custom = DeviceStore.load()
+        let custom = CustomDeviceSetupStore.load().map(\.profile)
         let devices = BuiltinDevices.all + custom
         let values = devices.map { device -> [String: Any] in
             [
@@ -1061,7 +1061,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
 
     func start() {
         do {
-            let devices = BuiltinDevices.all + DeviceStore.load()
+            let devices = BuiltinDevices.all + CustomDeviceSetupStore.load().map(\.profile)
             guard let selected = devices.first(where: { $0.id == invocation.deviceID }) else {
                 throw CLIError.unknownDevice(invocation.deviceID)
             }

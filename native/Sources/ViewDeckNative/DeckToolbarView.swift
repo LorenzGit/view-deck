@@ -6,6 +6,12 @@ enum DeckVideoCaptureState: Equatable {
     case saving
 }
 
+enum DeckLocalProcessState: Equatable {
+    case idle
+    case running
+    case stopping
+}
+
 final class DeckToolbarModel: ObservableObject {
     @Published var width = "440"
     @Published var height = "956"
@@ -18,6 +24,7 @@ final class DeckToolbarModel: ObservableObject {
     @Published var videoCaptureState = DeckVideoCaptureState.idle
     @Published var qaCheckpointCount = 0
     @Published var isSidebarCollapsed = false
+    @Published var localProcessState = DeckLocalProcessState.idle
 
     var commitViewport: (Double, Double) -> Void = { _, _ in }
     var changeDPR: (Double) -> Void = { _ in }
@@ -33,6 +40,7 @@ final class DeckToolbarModel: ObservableObject {
     var forward: () -> Void = {}
     var reload: () -> Void = {}
     var openDeveloperTools: () -> Void = {}
+    var stopLocalProcess: () -> Void = {}
     var load: (String) -> Void = { _ in }
 }
 
@@ -74,6 +82,10 @@ struct DeckToolbarView: View {
             .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
 
+            if model.localProcessState != .idle {
+                localProcessStopButton
+            }
+
             HStack(spacing: 8) {
                 Image(systemName: "globe.americas.fill")
                     .font(.system(size: 10.5, weight: .medium))
@@ -99,6 +111,23 @@ struct DeckToolbarView: View {
         .frame(height: 58)
         .background(ToolbarPalette.background)
         .overlay(alignment: .bottom) { Rectangle().fill(ToolbarPalette.line).frame(height: 1) }
+    }
+
+    private var localProcessStopButton: some View {
+        let isStopping = model.localProcessState == .stopping
+        return Button(action: model.stopLocalProcess) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 32, height: 32)
+                .background(Color.red.opacity(0.86), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.red.opacity(0.95)))
+        }
+        .buttonStyle(DeckToolbarButtonStyle())
+        .disabled(isStopping)
+        .opacity(isStopping ? 0.68 : 1)
+        .help(isStopping ? "The local process is stopping" : "Stop the local process")
+        .accessibilityLabel(isStopping ? "Local process is stopping" : "Stop local process")
     }
 
     private func browserIcon(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {

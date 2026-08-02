@@ -602,6 +602,16 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         )
     }
 
+    func showEmptyState() {
+        navigationGeneration &+= 1
+        currentURL = nil
+        networkBridgeSourceURL = nil
+        networkBridgeURL = nil
+        webView.stopLoading()
+        safariTop.address = "localhost"
+        loadPlaceholder()
+    }
+
     private func load(_ rawValue: String, bypassCache: Bool, resetSiteData: Bool) {
         guard let url = PreviewNavigationPolicy.normalizedWebURL(from: rawValue) else {
             showNavigationFailure(

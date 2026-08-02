@@ -19,16 +19,21 @@ private enum QAAppError: LocalizedError {
 }
 
 final class MainWindowController: NSWindowController, DevicePreviewDelegate, DevServerControllerDelegate, NSSplitViewDelegate {
-    private var customDevices = DeviceStore.load()
-    private var devices: [DeviceProfile] { BuiltinDevices.all + customDevices }
+    private var customSetups: [CustomDeviceSetup]
+    private var devices: [DeviceProfile] { BuiltinDevices.all + customSetups.map(\.profile) }
     private var selectedIndex = 0
-    private var selectedDevice: DeviceProfile { devices[selectedIndex] }
     private let preferences: ViewDeckPreferences
 
     private let splitView = NSSplitView()
     private let sidebar = FlippedView()
     private let center = FlippedView()
     private let inspector = FlippedView()
+    private let sidebarTabs = DeckSegmentedControl(
+        labels: ["Device Library", "Custom"],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
     private let deviceListStack = NSStackView()
     private let widthField = NSTextField()
     private let heightField = NSTextField()
@@ -137,9 +142,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     init() {
         let preferences = ViewDeckPreferences()
+        let initialCustomSetups = CustomDeviceSetupStore.load()
         self.preferences = preferences
+        customSetups = initialCustomSetups
         let selectedID = preferences.selectedDeviceID
-        let initialDevices = BuiltinDevices.all + DeviceStore.load()
+        let initialDevices = BuiltinDevices.all + initialCustomSetups.map(\.profile)
         selectedIndex = initialDevices.firstIndex(where: { $0.id == selectedID }) ?? 0
         let canvas = PreviewCanvasView(
             profile: initialDevices[selectedIndex],
@@ -271,19 +278,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func buildSidebar() {
-        let libraryLabel = sectionLabel("DEVICE LIBRARY")
-        sidebar.addSubview(libraryLabel)
-
-        let addButton = DeckButton(frame: .zero)
-        addButton.title = ""
-        addButton.target = self
-        addButton.action = #selector(addDevice)
-        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Add device")
-        addButton.imagePosition = .imageOnly
-        addButton.toolTip = "Add a custom device"
-        styleButton(addButton, fill: .clear, border: .clear, text: DeckTheme.muted, radius: 7)
-        addButton.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.addSubview(addButton)
+        sidebarTabs.selectedSegment = selectedIndex >= BuiltinDevices.all.count ? 1 : 0
+        sidebarTabs.selectionChanged = { [weak self] in self?.refreshDeviceLists() }
+        sidebarTabs.target = self
+        sidebarTabs.action = #selector(sidebarTabChanged)
+        sidebarTabs.setToolTip("Browse built-in device profiles", forSegment: 0)
+        sidebarTabs.setToolTip("Browse, edit, and remove saved custom setups", forSegment: 1)
+        sidebarTabs.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(sidebarTabs)
 
         deviceListStack.orientation = .vertical
         deviceListStack.alignment = .leading
@@ -317,13 +319,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         sidebar.addSubview(projectButton)
 
         NSLayoutConstraint.activate([
-            libraryLabel.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 18),
-            libraryLabel.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 15),
-            addButton.centerYAnchor.constraint(equalTo: libraryLabel.centerYAnchor),
-            addButton.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -15),
-            addButton.widthAnchor.constraint(equalToConstant: 30),
-            addButton.heightAnchor.constraint(equalToConstant: 30),
-            scroll.topAnchor.constraint(equalTo: libraryLabel.bottomAnchor, constant: 8),
+            sidebarTabs.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            sidebarTabs.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            sidebarTabs.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            sidebarTabs.heightAnchor.constraint(equalToConstant: 50),
+            scroll.topAnchor.constraint(equalTo: sidebarTabs.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 7),
             scroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -7),
             scroll.bottomAnchor.constraint(equalTo: quickActions.topAnchor, constant: -12),
@@ -388,6 +388,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         toolbarModel.forward = { [weak self] in self?.goForward() }
         toolbarModel.reload = { [weak self] in self?.reloadPreview() }
         toolbarModel.openDeveloperTools = { [weak self] in self?.canvas.preview.showWebInspector() }
+        toolbarModel.stopLocalProcess = { [weak self] in self?.stopLocalProcessAndClearPreview() }
         toolbarModel.load = { [weak self] address in
             guard let self else { return }
             self.addressField.stringValue = address
@@ -490,11 +491,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             safari,
             helpText("Reserves the measured Safari address and navigation bars around the website viewport.")
         ]))
-        let edit = makeWideButton(profile.builtin ? "Duplicate as custom skin" : "Edit custom skin", action: #selector(editSelectedDevice))
-        edit.toolTip = profile.builtin ? "Create an editable copy of this built-in device" : "Edit this custom device's shell and viewport"
-        edit.image = NSImage(systemSymbolName: profile.builtin ? "plus.square.on.square" : "slider.horizontal.3", accessibilityDescription: nil)
-        edit.imagePosition = .imageLeading
-        inspectorStack.addArrangedSubview(edit)
+        let add = makeWideButton(
+            "Add to custom devices",
+            action: #selector(addCurrentDeviceToCustom)
+        )
+        add.toolTip = "Save this device, its orientation, and active layers in the Custom tab"
+        add.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: nil)
+        add.imagePosition = .imageLeading
+        inspectorStack.addArrangedSubview(add)
     }
 
     private func buildSafeAreaInspector() {
@@ -1250,7 +1254,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         if server.ownsProcess(pid) {
-            server.stop()
+            stopLocalProcessAndClearPreview()
         } else {
             _ = kill(pid, SIGTERM)
         }
@@ -1261,7 +1265,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private func refreshDeviceLists() {
         deviceListStack.arrangedSubviews.forEach { deviceListStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        for (index, device) in devices.enumerated() {
+        if sidebarTabs.selectedSegment == 1 {
+            refreshCustomSetupList()
+            return
+        }
+        for (index, device) in BuiltinDevices.all.enumerated() {
             let symbol: String
             switch device.platform {
             case .desktop: symbol = "display"
@@ -1279,6 +1287,79 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
     }
 
+    private func refreshCustomSetupList() {
+        guard !customSetups.isEmpty else {
+            let empty = helpText("No custom devices yet. Select any device, then use Add to custom devices in the Device panel.")
+            deviceListStack.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: deviceListStack.widthAnchor, constant: -16).isActive = true
+            return
+        }
+
+        for (customIndex, setup) in customSetups.enumerated() {
+            let globalIndex = BuiltinDevices.all.count + customIndex
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 4
+            row.translatesAutoresizingMaskIntoConstraints = false
+
+            let button = makeSidebarButton(
+                setup.profile.name,
+                symbol: setup.landscape ? "rectangle" : "iphone",
+                action: #selector(sidebarDeviceSelected)
+            )
+            button.tag = globalIndex
+            button.toolTip = "Apply \(setup.profile.name), including orientation and layers"
+            button.state = globalIndex == selectedIndex ? .on : .off
+            applySidebarSelection(button, selected: globalIndex == selectedIndex)
+
+            let edit = customSetupIconButton(
+                symbol: "pencil",
+                tooltip: "Edit \(setup.profile.name)",
+                action: #selector(editCustomSetup(_:)),
+                tag: customIndex
+            )
+            let remove = customSetupIconButton(
+                symbol: "trash",
+                tooltip: "Remove \(setup.profile.name)",
+                action: #selector(removeCustomSetup(_:)),
+                tag: customIndex
+            )
+            styleButton(remove, fill: .clear, border: .clear, text: DeckTheme.danger, radius: 7)
+
+            row.addArrangedSubview(button)
+            row.addArrangedSubview(edit)
+            row.addArrangedSubview(remove)
+            button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            edit.setContentHuggingPriority(.required, for: .horizontal)
+            remove.setContentHuggingPriority(.required, for: .horizontal)
+            deviceListStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: deviceListStack.widthAnchor).isActive = true
+            row.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        }
+    }
+
+    private func customSetupIconButton(
+        symbol: String,
+        tooltip: String,
+        action: Selector,
+        tag: Int
+    ) -> NSButton {
+        let button = DeckButton(frame: .zero)
+        button.title = ""
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        button.imagePosition = .imageOnly
+        button.target = self
+        button.action = action
+        button.tag = tag
+        button.toolTip = tooltip
+        styleButton(button, fill: .clear, border: .clear, text: DeckTheme.muted, radius: 7)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        return button
+    }
+
     private func selectDevice(at index: Int) {
         guard devices.indices.contains(index) else { return }
         selectedIndex = index
@@ -1290,9 +1371,69 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         toolbarModel.height = Int(device.viewport.height).description
         toolbarModel.dpr = device.viewport.dpr
         preferences.selectedDeviceID = device.id
+        if index >= BuiltinDevices.all.count {
+            applyCustomSetup(customSetups[index - BuiltinDevices.all.count])
+        }
         refreshDeviceLists()
         updateStatus()
         rebuildInspector()
+    }
+
+    private func applyCustomSetup(_ setup: CustomDeviceSetup) {
+        canvas.preview.landscape = setup.landscape
+        preferences.isLandscape = setup.landscape
+        for kind in HTMLLayerKind.allCases {
+            applyCustomLayer(setup.layer(kind), kind: kind)
+        }
+    }
+
+    private func applyCustomLayer(
+        _ selection: CustomDeviceLayerSelection,
+        kind: HTMLLayerKind
+    ) {
+        let builtIn = Self.builtInLayer(for: kind)
+        let libraryLayer = layerLibrary.first {
+            $0.kind == kind && $0.id == selection.identifier
+        }
+        let isBuiltIn = selection.identifier == builtIn?.id
+        let html = isBuiltIn
+            ? builtIn?.html
+            : libraryLayer.flatMap { try? String(contentsOf: $0.url, encoding: .utf8) }
+        let path = libraryLayer?.url
+        let baseURL = path?.deletingLastPathComponent()
+        let activeIdentifier = html == nil ? nil : selection.identifier
+
+        if let activeIdentifier {
+            UserDefaults.standard.set(activeIdentifier, forKey: activeLayerDefaultsKey(kind))
+        } else {
+            UserDefaults.standard.removeObject(forKey: activeLayerDefaultsKey(kind))
+        }
+
+        switch kind {
+        case .header:
+            sampleHeaderEnabled = isBuiltIn && html != nil
+            headerPath = path
+            canvas.preview.headerBaseURL = baseURL
+            canvas.preview.headerHeight = selection.extent
+            canvas.preview.headerHTML = html
+        case .footer:
+            footerPath = path
+            canvas.preview.footerBaseURL = baseURL
+            canvas.preview.footerHeight = selection.extent
+            canvas.preview.footerHTML = html
+        case .left:
+            sampleLeftEnabled = isBuiltIn && html != nil
+            leftPath = path
+            canvas.preview.leftBaseURL = baseURL
+            canvas.preview.leftWidth = selection.extent
+            canvas.preview.leftHTML = html
+        case .right:
+            sampleRightEnabled = isBuiltIn && html != nil
+            rightPath = path
+            canvas.preview.rightBaseURL = baseURL
+            canvas.preview.rightWidth = selection.extent
+            canvas.preview.rightHTML = html
+        }
     }
 
     private func updateStatus() {
@@ -1304,6 +1445,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func sidebarDeviceSelected(_ sender: NSButton) { selectDevice(at: sender.tag) }
+    @objc private func sidebarTabChanged() { refreshDeviceLists() }
 
     @objc private func viewportChanged() {
         var device = canvas.preview.profile
@@ -2600,8 +2742,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     @objc private func toggleServer() {
         if server.state == .stopping { return }
         if server.state == .running || server.state == .starting {
-            pendingServerPreviewIdentity = nil
-            server.stop()
+            stopLocalProcessAndClearPreview()
             return
         }
         logView.string = ""
@@ -2651,6 +2792,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
     }
 
+    private func stopLocalProcessAndClearPreview() {
+        pendingServerPreviewIdentity = nil
+        canvas.preview.showEmptyState()
+        server.stop()
+    }
+
     private func serverPreviewIdentity(folder: URL, launchDescription: String) -> String {
         "\(folder.standardizedFileURL.path)\u{0}\(launchMode.rawValue)\u{0}\(launchDescription)"
     }
@@ -2661,30 +2808,94 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         canvas.preview.loadLocalFile(file)
     }
 
-    @objc private func addDevice() { presentDeviceEditor(seed: BuiltinDevices.customTemplate, replacing: nil) }
-    @objc private func editSelectedDevice() {
-        let seed = canvas.preview.profile
-        let replacement = seed.builtin ? nil : seed.id
-        presentDeviceEditor(seed: seed.builtin ? duplicate(seed) : seed, replacing: replacement)
+    @objc private func addCurrentDeviceToCustom() {
+        let identifier = UUID().uuidString
+        var profile = canvas.preview.profile
+        profile.id = identifier
+        profile.name += profile.builtin ? " Custom" : " Copy"
+        profile.builtin = false
+        presentCustomDeviceEditor(
+            setup: CustomDeviceSetup(
+                id: identifier,
+                profile: profile,
+                landscape: canvas.preview.landscape,
+                header: currentLayerSelection(.header),
+                footer: currentLayerSelection(.footer),
+                left: currentLayerSelection(.left),
+                right: currentLayerSelection(.right)
+            ),
+            replacing: nil
+        )
     }
 
-    private func duplicate(_ device: DeviceProfile) -> DeviceProfile {
-        var copy = device
-        copy.id = UUID().uuidString
-        copy.name += " Copy"
-        copy.builtin = false
-        return copy
+    @objc private func editCustomSetup(_ sender: NSButton) {
+        guard customSetups.indices.contains(sender.tag) else { return }
+        let setup = customSetups[sender.tag]
+        presentCustomDeviceEditor(setup: setup, replacing: setup.id)
     }
 
-    private func presentDeviceEditor(seed: DeviceProfile, replacing id: String?) {
-        let model = DeviceEditorModel(profile: seed)
+    @objc private func removeCustomSetup(_ sender: NSButton) {
+        guard customSetups.indices.contains(sender.tag) else { return }
+        let setup = customSetups[sender.tag]
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remove \(setup.profile.name)?"
+        alert.informativeText = "This removes the saved custom setup. Imported layer files are left intact."
+        alert.addButton(withTitle: "Remove custom device")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let removedGlobalIndex = BuiltinDevices.all.count + sender.tag
+        customSetups.remove(at: sender.tag)
+        CustomDeviceSetupStore.save(customSetups)
+        if selectedIndex == removedGlobalIndex {
+            if customSetups.isEmpty {
+                sidebarTabs.selectedSegment = 0
+                selectDevice(at: 0)
+            } else {
+                selectDevice(at: BuiltinDevices.all.count + min(sender.tag, customSetups.count - 1))
+            }
+        } else {
+            if selectedIndex > removedGlobalIndex { selectedIndex -= 1 }
+            refreshDeviceLists()
+        }
+    }
+
+    private func currentLayerSelection(_ kind: HTMLLayerKind) -> CustomDeviceLayerSelection {
+        let identifier: String?
+        let extent: CGFloat
+        switch kind {
+        case .header:
+            identifier = sampleHeaderEnabled
+                ? Self.builtInLayer(for: kind)?.id
+                : layerLibrary.first(where: { $0.kind == kind && $0.path == headerPath?.path })?.id
+            extent = canvas.preview.headerHeight
+        case .footer:
+            identifier = layerLibrary.first(where: { $0.kind == kind && $0.path == footerPath?.path })?.id
+            extent = canvas.preview.footerHeight
+        case .left:
+            identifier = sampleLeftEnabled
+                ? Self.builtInLayer(for: kind)?.id
+                : layerLibrary.first(where: { $0.kind == kind && $0.path == leftPath?.path })?.id
+            extent = canvas.preview.leftWidth
+        case .right:
+            identifier = sampleRightEnabled
+                ? Self.builtInLayer(for: kind)?.id
+                : layerLibrary.first(where: { $0.kind == kind && $0.path == rightPath?.path })?.id
+            extent = canvas.preview.rightWidth
+        }
+        return CustomDeviceLayerSelection(identifier: identifier, extent: extent)
+    }
+
+    private func presentCustomDeviceEditor(setup: CustomDeviceSetup, replacing id: String?) {
+        let model = DeviceEditorModel(setup: setup)
         let panel = NSPanel(
             contentRect: CGRect(x: 0, y: 0, width: 590, height: 680),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        panel.title = id == nil ? "Add device skin" : "Edit device skin"
+        panel.title = id == nil ? "Add custom device" : "Edit custom device"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.backgroundColor = DeckTheme.panel
@@ -2696,6 +2907,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let editor = DeviceEditorView(
             model: model,
             editing: id != nil,
+            layerOptions: deviceEditorLayerOptions(for: setup),
             onSave: { NSApp.stopModal(withCode: .OK) },
             onCancel: { NSApp.stopModal(withCode: .cancel) }
         )
@@ -2708,12 +2920,36 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.orderOut(nil)
         guard response == .OK else { return }
 
-        let device = model.makeProfile()
-        if let id, let index = customDevices.firstIndex(where: { $0.id == id }) { customDevices[index] = device }
-        else { customDevices.append(device) }
-        DeviceStore.save(customDevices)
-        selectedIndex = BuiltinDevices.all.count + (customDevices.firstIndex(where: { $0.id == device.id }) ?? customDevices.count - 1)
-        refreshDeviceLists(); selectDevice(at: selectedIndex)
+        let savedSetup = model.makeSetup()
+        if let id, let index = customSetups.firstIndex(where: { $0.id == id }) {
+            customSetups[index] = savedSetup
+        } else {
+            customSetups.append(savedSetup)
+        }
+        CustomDeviceSetupStore.save(customSetups)
+        sidebarTabs.selectedSegment = 1
+        selectedIndex = BuiltinDevices.all.count
+            + (customSetups.firstIndex(where: { $0.id == savedSetup.id }) ?? customSetups.count - 1)
+        selectDevice(at: selectedIndex)
+    }
+
+    private func deviceEditorLayerOptions(
+        for setup: CustomDeviceSetup
+    ) -> [HTMLLayerKind: [DeviceEditorLayerOption]] {
+        Dictionary(uniqueKeysWithValues: HTMLLayerKind.allCases.map { kind in
+            var options = [DeviceEditorLayerOption(id: DeviceEditorModel.noLayerID, title: "None")]
+            if let builtIn = Self.builtInLayer(for: kind) {
+                options.append(DeviceEditorLayerOption(id: builtIn.id, title: builtIn.name))
+            }
+            options += layerLibrary
+                .filter { $0.kind == kind }
+                .map { DeviceEditorLayerOption(id: $0.id, title: $0.name) }
+            if let identifier = setup.layer(kind).identifier,
+               !options.contains(where: { $0.id == identifier }) {
+                options.append(DeviceEditorLayerOption(id: identifier, title: "Missing layer"))
+            }
+            return (kind, options)
+        })
     }
 
     func previewDidStartLoading() {
@@ -2765,6 +3001,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     func devServerStateChanged(_ state: DevServerState, url: URL?) {
+        switch state {
+        case .starting, .running:
+            toolbarModel.localProcessState = .running
+        case .stopping:
+            toolbarModel.localProcessState = .stopping
+        case .idle, .failed:
+            toolbarModel.localProcessState = .idle
+        }
         switch state {
         case .idle:
             pendingServerPreviewIdentity = nil
