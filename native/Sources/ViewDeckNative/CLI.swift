@@ -217,6 +217,7 @@ public enum ViewDeckCommand {
             landscape: invocation.landscape,
             showSafeArea: invocation.showSafeArea,
             applySafeAreaToPage: invocation.applySafeArea,
+            networkShapingConfiguration: invocation.networkShapingConfiguration,
             header: header,
             footer: footer,
             left: left,
@@ -526,11 +527,25 @@ public enum ViewDeckCommand {
             ],
             "sources": ["url", "localFile", "npmScript", "customCommand"],
             "readiness": ["load", "cssSelector", "javaScript", "prepareJavaScript", "delay"],
+            "networkShaping": [
+                "roundTripLatency",
+                "jitter",
+                "downloadBandwidth",
+                "uploadBandwidth",
+                "offline",
+                "deterministicSeed",
+                "scenarioPersistence",
+                "SOCKSv5TCPProxy",
+                "localHTTPTCPBridge",
+                "resourceActivity"
+            ],
             "artifacts": ["png", "mp4", "json"],
             "preview": [
                 "defaultVisibility": "hidden",
                 "visibilityModes": ["hidden", "visible"],
                 "visibleFlag": "--show-preview",
+                "hiddenRendering": "activeOffscreenWebKit",
+                "captureBackend": "windowCompositor",
                 "audioModes": ["normal", "verify-silent"],
                 "silentAudioVerificationFlag": "--audio verify-silent"
             ],
@@ -543,7 +558,7 @@ public enum ViewDeckCommand {
                 "configuration": [
                     "deviceProfile", "orientation", "CSSResolution", "physicalResolution",
                     "DPR", "safeArea", "SafariChrome", "header", "footer",
-                    "landscapeLeftRail", "landscapeRightRail", "source"
+                    "landscapeLeftRail", "landscapeRightRail", "networkShaping", "source"
                 ]
             ],
             "captureScales": ["0.5...3", "deviceDPR"],
@@ -626,6 +641,8 @@ struct CLIInvocation {
     var failOnIssues = false
     var showPreview = false
     var audioMode: AudioMode = .normal
+    var networkShapingConfiguration = NetworkShapingConfiguration.disabled
+    var hasNetworkShapingOverride = false
     var scenarioInput: URL?
     var scenarioOutput: URL?
     var scenarioName: String?
@@ -775,6 +792,51 @@ struct CLIInvocation {
                     )
                 }
                 value.audioMode = audioMode
+            case "--network-enable":
+                value.networkShapingConfiguration.enabled = true
+                value.hasNetworkShapingOverride = true
+            case "--network-rtt-ms":
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.roundTripTimeMilliseconds = try nonnegativeDouble(
+                    try requiredValue(for: argument),
+                    flag: argument
+                )
+                value.hasNetworkShapingOverride = true
+            case "--network-jitter-ms":
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.jitterMilliseconds = try nonnegativeDouble(
+                    try requiredValue(for: argument),
+                    flag: argument
+                )
+                value.hasNetworkShapingOverride = true
+            case "--network-down-kbps":
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.downloadKilobitsPerSecond = try nonnegativeDouble(
+                    try requiredValue(for: argument),
+                    flag: argument
+                )
+                value.hasNetworkShapingOverride = true
+            case "--network-up-kbps":
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.uploadKilobitsPerSecond = try nonnegativeDouble(
+                    try requiredValue(for: argument),
+                    flag: argument
+                )
+                value.hasNetworkShapingOverride = true
+            case "--network-offline":
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.offline = true
+                value.hasNetworkShapingOverride = true
+            case "--network-seed":
+                guard let seed = UInt64(try requiredValue(for: argument)),
+                      seed <= NetworkShapingConfiguration.maximumJSONSafeSeed else {
+                    throw CLIError.invalidArgument(
+                        "--network-seed requires an integer from 0 through \(NetworkShapingConfiguration.maximumJSONSafeSeed)."
+                    )
+                }
+                value.networkShapingConfiguration.enabled = true
+                value.networkShapingConfiguration.seed = seed
+                value.hasNetworkShapingOverride = true
             case "--speed":
                 let speed = try requiredValue(for: argument)
                 if speed == "smart" {
@@ -887,14 +949,14 @@ struct CLIInvocation {
     }
 
     private static func positiveDouble(_ value: String, flag: String) throws -> Double {
-        guard let result = Double(value), result > 0 else {
+        guard let result = Double(value), result.isFinite, result > 0 else {
             throw CLIError.invalidArgument("\(flag) requires a positive number.")
         }
         return result
     }
 
     private static func nonnegativeDouble(_ value: String, flag: String) throws -> Double {
-        guard let result = Double(value), result >= 0 else {
+        guard let result = Double(value), result.isFinite, result >= 0 else {
             throw CLIError.invalidArgument("\(flag) requires a nonnegative number.")
         }
         return result
@@ -1051,7 +1113,11 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
     }
 
     private func preparePreview() throws {
-        preview = DevicePreviewView(profile: device)
+        preview = DevicePreviewView(
+            profile: device,
+            networkShapingConfiguration: invocation.networkShapingConfiguration
+        )
+        if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
         if invocation.audioMode == .verifySilent,
            !preview.enableSilentAudioVerification() {
@@ -1091,6 +1157,9 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             size: size,
             showPreview: invocation.showPreview
         )
+        if !invocation.showPreview, !preview.enableOffscreenRendering() {
+            throw CLIError.offscreenRenderingUnavailable
+        }
         preview.layoutSubtreeIfNeeded()
     }
 
@@ -1253,7 +1322,8 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             inspectPage()
             return
         }
-        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
+        let captureScale = invocation.captureScale ?? preview.profile.viewport.dpr
+        preview.captureVideoFrame(scale: captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
@@ -1314,10 +1384,12 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
         if let value = serverURL { source["serverURL"] = value.absoluteString }
         if let value = finalURL { source["finalURL"] = value.absoluteString }
         source["title"] = (audit["title"] as? String) ?? title ?? ""
+        var networkReport = preview.networkShapingReport()
+        networkReport["activity"] = audit["network"] ?? [:]
 
         var report: [String: Any] = [
             "schemaVersion": 1,
-            "ok": true,
+            "ok": !failedPolicy,
             "command": invocation.operation.rawValue,
             "preview": previewReport,
             "source": source,
@@ -1345,6 +1417,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
                 ],
                 "safariChrome": device.safariChrome
             ],
+            "network": networkReport,
             "audit": audit,
             "serverLog": serverLog,
             "artifacts": artifacts,
@@ -1377,7 +1450,8 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
         [
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
-            "captureBackend": "webkitSnapshotPlusCanvasReadback"
+            "captureBackend": "windowCompositor",
+            "offscreenRenderingEnabled": preview.offscreenRenderingEnabled
         ]
     }
 
@@ -1399,6 +1473,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
     private let server = DevServerController()
     private let startedAt = Date()
     private var scenario: QAScenario!
+    private var effectiveConfiguration: QADeviceConfiguration!
     private var preview: DevicePreviewView!
     private var window: NSWindow?
     private var serverLog: [[String: Any]] = []
@@ -1474,8 +1549,16 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
     }
 
     private func preparePreview() throws {
-        let configuration = scenario.configuration
-        preview = DevicePreviewView(profile: configuration.profile)
+        var configuration = scenario.configuration
+        if invocation.hasNetworkShapingOverride {
+            configuration.network = invocation.networkShapingConfiguration
+        }
+        effectiveConfiguration = configuration
+        preview = DevicePreviewView(
+            profile: configuration.profile,
+            networkShapingConfiguration: configuration.network ?? .disabled
+        )
+        if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
         if invocation.audioMode == .verifySilent,
            !preview.enableSilentAudioVerification() {
@@ -1528,6 +1611,9 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             size: size,
             showPreview: invocation.showPreview
         )
+        if !invocation.showPreview, !preview.enableOffscreenRendering() {
+            throw CLIError.offscreenRenderingUnavailable
+        }
         preview.layoutSubtreeIfNeeded()
     }
 
@@ -1618,7 +1704,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
                 framesPerSecond: invocation.videoFPS,
                 captureScale: invocation.videoScale,
                 overwrite: invocation.overwrite,
-                frameSource: invocation.showPreview ? .windowCompositor : .webkitSnapshot
+                frameSource: .windowCompositor
             )
             videoRecorder = recorder
             recorder.record(preview: preview) { [weak self] result in
@@ -1668,7 +1754,8 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             completion()
             return
         }
-        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
+        let captureScale = invocation.captureScale ?? preview.profile.viewport.dpr
+        preview.captureVideoFrame(scale: captureScale) { [weak self] result in
             guard let self else {
                 completion()
                 return
@@ -1695,7 +1782,8 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             inspectPage()
             return
         }
-        preview.captureScreenshotWithCanvasReadback(scale: invocation.captureScale) { [weak self] result in
+        let captureScale = invocation.captureScale ?? preview.profile.viewport.dpr
+        preview.captureVideoFrame(scale: captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
@@ -1737,7 +1825,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         if !checkpointPaths.isEmpty { artifactPaths["checkpoints"] = checkpointPaths }
         if let reportURL = invocation.reportOutput { artifactPaths["report"] = reportURL.path }
 
-        let configurationData = try JSONEncoder().encode(scenario.configuration)
+        let configurationData = try JSONEncoder().encode(effectiveConfiguration)
         let configurationObject = try JSONSerialization.jsonObject(with: configurationData)
         let timingPlanData = try JSONEncoder().encode(summary.timing)
         let timingPlanObject = try JSONSerialization.jsonObject(with: timingPlanData)
@@ -1749,6 +1837,8 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         } else {
             playbackSpeedValue = invocation.playbackSpeed
         }
+        var networkReport = preview.networkShapingReport()
+        networkReport["activity"] = audit["network"] ?? [:]
         var report: [String: Any] = [
             "schemaVersion": 1,
             "ok": replayErrors.isEmpty && !policyFailure,
@@ -1767,6 +1857,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
                 "launchMode": scenario.source.launchMode ?? ""
             ],
             "configuration": configurationObject,
+            "network": networkReport,
             "playback": [
                 "speed": playbackSpeedValue,
                 "recordedDurationMilliseconds": scenario.timing.durationMilliseconds,
@@ -1804,7 +1895,8 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         [
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
-            "captureBackend": invocation.showPreview ? "windowCompositor" : "webkitSnapshotPlusCanvasReadback"
+            "captureBackend": "windowCompositor",
+            "offscreenRenderingEnabled": preview.offscreenRenderingEnabled
         ]
     }
 
@@ -1876,7 +1968,7 @@ private final class PreviewVideoRecorder {
         preview: DevicePreviewView,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        preview.captureScreenshotWithCanvasReadback(scale: captureScale) { [weak self] result in
+        preview.captureVideoFrame(scale: captureScale) { [weak self] result in
             guard let self else { return }
             do {
                 let image = try result.get()
@@ -2090,6 +2182,7 @@ private enum CLIError: LocalizedError {
     case timeout(TimeInterval)
     case serverFailed
     case audioVerificationUnavailable
+    case offscreenRenderingUnavailable
     case imageEncoding
     case videoEncoding(String)
     case jsonEncoding
@@ -2108,6 +2201,8 @@ private enum CLIError: LocalizedError {
         case .serverFailed: return "The local development server exited before the preview was ready."
         case .audioVerificationUnavailable:
             return "Silent audio verification is unavailable in this WebKit version."
+        case .offscreenRenderingUnavailable:
+            return "Offscreen rendering is unavailable in this WebKit version."
         case .imageEncoding: return "ViewDeck could not encode the screenshot as PNG."
         case .videoEncoding(let message): return "ViewDeck could not encode the MP4: \(message)"
         case .jsonEncoding: return "ViewDeck could not encode the JSON report."
@@ -2154,6 +2249,15 @@ private enum CLIHelp {
       --right <file.html>            Add a landscape right rail layer
       --right-width <points>         Right rail width (default: 118)
 
+    NETWORK SHAPING
+      --network-enable               Enable shaping with the default values
+      --network-rtt-ms <ms>          Added round-trip latency (default: 300)
+      --network-jitter-ms <ms>       Seeded one-way jitter, plus or minus (default: 30)
+      --network-down-kbps <kbps>     Download limit; 0 is unlimited (default: 1600)
+      --network-up-kbps <kbps>       Upload limit; 0 is unlimited (default: 750)
+      --network-offline              Block connections through the preview transport
+      --network-seed <integer>       Deterministic jitter seed (default: 42)
+
     READINESS
       --wait-for <selector>          Wait for a CSS selector
       --wait-js <expression>         Wait until a JavaScript expression is truthy
@@ -2194,6 +2298,7 @@ private enum CLIHelp {
       viewdeck capture http://localhost:5173 --device iphone-17-pro-max --output page.png --report page.json
       viewdeck inspect --project . --npm-script dev --wait-for canvas --json
       viewdeck inspect --project . --audio verify-silent --report audio.json --json
+      viewdeck inspect https://example.com --network-rtt-ms 400 --network-down-kbps 1500 --json
       viewdeck record --project . --npm-script dev --wait-for canvas --duration 6 --fps 12 --output game.mp4 --screenshot game.png --report game.json
       viewdeck qa template http://localhost:5173 --device iphone-17-pro-max --output gameplay.viewdeck.json
       viewdeck qa replay gameplay.viewdeck.json --speed smart --artifacts qa-results --video replay.mp4 --report replay.json

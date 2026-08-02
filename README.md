@@ -21,6 +21,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Local preview modes for an npm script, a static HTML file, or a custom command.
 - Automatic localhost URL detection, port-conflict rerouting, in-app process output, and stop controls.
 - Live localhost port inventory with process, command, working-directory, collision, open, and stop controls.
+- Deterministic per-preview network shaping for round-trip latency, jitter, upload/download bandwidth, and offline behavior.
 - Resizable side panels and a compact, responsive workspace.
 - One-click screen-only device screenshots with editable text, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
 - A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
@@ -56,9 +57,13 @@ The build also creates `dist/native/viewdeck`, a standalone command-line executa
 CLI previews are hidden by default. ViewDeck keeps an ordered WebKit panel
 outside the bounds of every connected display so pages can render, receive
 replayed input, and produce screenshots or video without showing a mini device
-window to the user. Pass `--show-preview` when visually debugging a CLI run.
-Machine-readable reports expose the selected visibility, capture backend, and
-whether the preview window intersects a display.
+window to the user. Hidden previews disable WebKit's window-occlusion throttling
+so `requestAnimationFrame`, WebGPU queue work, and media timelines remain active.
+Screenshots and video frames come from the preview window's compositor surface,
+which preserves GPU-backed canvas content. Pass `--show-preview` when visually
+debugging a CLI run. Machine-readable reports expose the selected visibility,
+capture backend, offscreen-rendering state, and whether the preview window
+intersects a display.
 
 For an offscreen run that may play sound, pass `--audio verify-silent`.
 ViewDeck mutes the WebKit page output without pausing its media timeline, then
@@ -101,6 +106,21 @@ dist/native/viewdeck record \
 
 `capture`, `inspect`, and `record` accept an HTTP URL, a local HTML file, or a managed project command. Readiness can be tied to page load, a CSS selector, or a JavaScript expression. `--prepare-js` can establish a deterministic page state after readiness and before artifacts are captured. Reports include the final URL and title, device geometry, safe-area values, console messages, uncaught page errors, canvas dimensions, horizontal overflow, offscreen interactive elements, and interactive safe-area overlaps.
 
+Apply repeatable network conditions with explicit values:
+
+```bash
+dist/native/viewdeck inspect https://example.com \
+  --network-rtt-ms 400 \
+  --network-jitter-ms 40 \
+  --network-down-kbps 1500 \
+  --network-up-kbps 500 \
+  --network-seed 42 \
+  --report /tmp/network.json \
+  --json
+```
+
+Any network option enables shaping. Use `--network-enable` for the defaults, `--network-offline` to block connections, and a bandwidth value of `0` for unlimited throughput. ViewDeck routes remote TCP traffic through a loopback SOCKSv5 proxy and local HTTP traffic through a loopback TCP bridge, splits RTT across both directions, and uses the seed to make jitter repeatable. Reports identify the effective transport, whether shaped traffic was actually observed, connection and byte counters, and `network.activity.resources` with each document, script, style, image, font, media, and fetch/XHR lifecycle. Increase `--timeout` when deliberately testing long delays or low bandwidth.
+
 Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-issues` for CI policies, and `viewdeck help` for the complete option list. JSON mode keeps ViewDeck's own result on stdout and writes development-server output to stderr.
 
 ### Test scenarios
@@ -115,11 +135,11 @@ While recording, **Replay test** becomes **Add checkpoint**. Click it to save a 
 - A complete MP4 when **Include an MP4 with this test recording** was selected.
 - A timestamped PNG for every checkpoint.
 
-The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
+The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, network-shaping configuration, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
 
 Click **Replay test** to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the control becomes **Stop replay**; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
 
-When enabled in the interactive studio or a CLI replay using `--show-preview`, live video capture uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots. Hidden CLI runs use WebKit snapshot frames instead so recording does not require an on-screen window. Capture and H.264 encoding run away from the main UI thread at a video-appropriate resolution. If the machine cannot produce a frame on time, ViewDeck skips that slot instead of issuing a burst of catch-up captures that would compete with the tested page. Explicit screenshots and checkpoints continue to use the high-fidelity composited snapshot path.
+Live video capture uses the macOS window compositor at 30 FPS rather than repeatedly requesting synchronous WKWebView snapshots, including for hidden CLI runs. Capture and H.264 encoding run away from the main UI thread at a video-appropriate resolution. If the machine cannot produce a frame on time, ViewDeck skips that slot instead of issuing a burst of catch-up captures that would compete with the tested page. Explicit screenshots and checkpoints use the same GPU-compatible compositor path.
 
 AI agents can generate a complete, valid scenario skeleton without hand-authoring the device configuration:
 
@@ -171,6 +191,16 @@ Before ViewDeck launches a recognized development server, it records the ports t
 When a different project or launch command reuses a localhost port, ViewDeck clears that local origin's WebKit site data before loading it. This prevents service workers and cached assets from the previous project from appearing in the new preview. Restarting the same project preserves its cookies and local storage while still bypassing stale HTTP responses.
 
 The **Ports** inspector shows every detected listening process, grouped into development servers and other listeners. If multiple processes outside an automatically rerouted launch own the same port, ViewDeck marks the collision and refuses to open the ambiguous `localhost` URL until one listener is stopped.
+
+## Network shaping
+
+Open the **Network** inspector to enable shaping, edit RTT, jitter, downlink, uplink, and seed values, or switch the preview offline. Enabling or changing offline state reloads the current page; numeric changes apply to subsequent traffic immediately. Use **Reload from origin with these conditions** when cached resources need revalidation. The status changes from **Ready** to **Verified** only after the transport observes real page bytes.
+
+The inspector's **Resource activity** section updates while the page loads. It lists the document and known scripts, styles, images, fonts, frames, media, and fetch/XHR requests with pending, complete, or failed state, duration, response size when WebKit exposes it, HTTP status when available, and cache attribution. The overall bar measures completed known request lifecycles; pending resource bars are indeterminate because WebKit does not expose incremental response bytes through its public resource-timing API.
+
+Network shaping covers TCP traffic from the primary preview, including navigation, subresources, fetch/XHR, server-sent events, and WebSockets. HTTPS remains end-to-end encrypted because the proxy schedules tunnel bytes instead of installing a certificate or decrypting requests. WebKit always bypasses proxy settings for literal loopback destinations, so local **HTTP** pages are loaded through an internal `127.0.0.1` bridge URL; ViewDeck keeps the requested URL in its UI and reports both `requestedURL` and `transportURL`, but page code that directly reads its own origin can observe the internal transport origin. Local HTTPS keeps its certificate-bound origin and therefore cannot use this bridge. A recorded or generated QA scenario preserves the configuration, and replay restores it before clearing site data and loading the source. CLI network flags on `qa replay` act as a temporary override and do not rewrite the scenario.
+
+The proxy provides deterministic application-level conditions rather than radio simulation. HTTP/3/QUIC is not shaped and may fall back to a TCP-based protocol. ViewDeck does not claim packet-loss, cellular-handoff, or RF-level fidelity.
 
 ## Device profiles and safe areas
 

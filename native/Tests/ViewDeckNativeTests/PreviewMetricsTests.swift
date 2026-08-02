@@ -207,6 +207,218 @@ final class PreviewMetricsTests: XCTestCase {
         withExtendedLifetime((retainedPreview, retainedProbe)) {}
     }
 
+    func testHiddenPreviewRendersAndCapturesWebGPU() throws {
+        guard #available(macOS 26.0, *) else {
+            throw XCTSkip("WebGPU ships with WebKit on macOS 26 and newer.")
+        }
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/webgpu/index.html")
+        let device = try XCTUnwrap(BuiltinDevices.all.first { $0.id == "iphone-17-pro-max" })
+        let completed = expectation(description: "hidden WebGPU frame renders and captures")
+        var retainedPreview: DevicePreviewView?
+        var retainedProbe: PreviewNavigationProbe?
+        var retainedWindow: NSWindow?
+
+        DispatchQueue.main.async {
+            let preview = DevicePreviewView(profile: device)
+            let probe = PreviewNavigationProbe()
+            let size = preview.logicalSize
+            preview.frame = CGRect(origin: .zero, size: size)
+            preview.bounds = preview.frame
+            preview.autoresizingMask = [.width, .height]
+            let window = CLIPreviewWindow.make(
+                contentView: preview,
+                size: size,
+                showPreview: false
+            )
+            retainedPreview = preview
+            retainedProbe = probe
+            retainedWindow = window
+            preview.delegate = probe
+
+            XCTAssertFalse(CLIPreviewWindow.intersectsDisplay(window))
+            guard preview.enableOffscreenRendering() else {
+                XCTFail("The host WebKit cannot keep an offscreen preview active.")
+                completed.fulfill()
+                return
+            }
+
+            probe.didFinish = { _, url in
+                guard url?.standardizedFileURL == fixture.standardizedFileURL,
+                      let webView = firstWebView(in: preview) else { return }
+                let verifyCapture = {
+                    preview.captureVideoFrame(scale: 1) { result in
+                        do {
+                            let image = try result.get()
+                            guard let cgImage = image.cgImage(
+                                forProposedRect: nil,
+                                context: nil,
+                                hints: nil
+                            ) else {
+                                XCTFail("The captured WebGPU frame has no pixel data.")
+                                completed.fulfill()
+                                return
+                            }
+                            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+                            let color = bitmap.colorAt(
+                                x: bitmap.pixelsWide / 2,
+                                y: bitmap.pixelsHigh / 2
+                            )?.usingColorSpace(.deviceRGB)
+                            XCTAssertNotNil(color)
+                            XCTAssertGreaterThan(color?.greenComponent ?? 0, 0.65)
+                            XCTAssertLessThan(color?.redComponent ?? 1, 0.2)
+                            XCTAssertLessThan(color?.blueComponent ?? 1, 0.35)
+                            completed.fulfill()
+                        } catch {
+                            XCTFail("Could not capture the WebGPU frame: \(error)")
+                            completed.fulfill()
+                        }
+                    }
+                }
+                var pollCount = 0
+                var poll: (() -> Void)!
+                poll = {
+                    webView.evaluateJavaScript("""
+                    JSON.stringify({
+                      status: document.documentElement.dataset.webgpuStatus || '',
+                      hidden: document.hidden,
+                      frame: Number(document.documentElement.dataset.webgpuFrame || 0)
+                    })
+                    """) { value, error in
+                        XCTAssertNil(error)
+                        guard let encoded = value as? String,
+                              let data = encoded.data(using: .utf8),
+                              let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        else {
+                            XCTFail("The WebGPU fixture returned an invalid state.")
+                            completed.fulfill()
+                            return
+                        }
+
+                        switch state["status"] as? String {
+                        case "ready":
+                            XCTAssertEqual(state["hidden"] as? Bool, false)
+                            let readyFrame = (state["frame"] as? NSNumber)?.intValue ?? 0
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                webView.evaluateJavaScript(
+                                    "Number(document.documentElement.dataset.webgpuFrame || 0)"
+                                ) { value, error in
+                                    XCTAssertNil(error)
+                                    XCTAssertGreaterThan(
+                                        (value as? NSNumber)?.intValue ?? 0,
+                                        readyFrame,
+                                        "The hidden WebGPU animation stopped after its first frame."
+                                    )
+                                    verifyCapture()
+                                }
+                            }
+                        case "failed":
+                            XCTFail("The WebGPU fixture failed to initialize.")
+                            completed.fulfill()
+                        default:
+                            pollCount += 1
+                            if pollCount >= 200 {
+                                XCTFail("The WebGPU fixture did not render in time.")
+                                completed.fulfill()
+                            } else {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: poll)
+                            }
+                        }
+                    }
+                }
+                poll()
+            }
+            probe.didFail = { message in
+                XCTFail("Preview failed while testing WebGPU: \(message)")
+                completed.fulfill()
+            }
+            preview.loadLocalFile(fixture)
+        }
+
+        wait(for: [completed], timeout: 10)
+        retainedWindow?.orderOut(nil)
+        withExtendedLifetime((retainedPreview, retainedProbe, retainedWindow)) {}
+    }
+
+    func testPreviewReportsCompletedAndFailedPageResources() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckNetworkActivity-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let page = directory.appendingPathComponent("index.html")
+        try """
+        <!doctype html>
+        <title>network activity</title>
+        <link rel="stylesheet" href="style.css">
+        <script src="app.js" defer></script>
+        <img src="image.svg" alt="fixture">
+        <img src="missing.png" alt="missing">
+        """.write(to: page, atomically: true, encoding: .utf8)
+        try "body { color: rgb(1, 2, 3); }".write(
+            to: directory.appendingPathComponent("style.css"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "window.networkFixtureLoaded = true;".write(
+            to: directory.appendingPathComponent("app.js"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        <svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+          <rect width="2" height="2" fill="red"/>
+        </svg>
+        """.write(
+            to: directory.appendingPathComponent("image.svg"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let captured = expectation(description: "resource activity captured")
+        var retainedPreview: DevicePreviewView?
+        var retainedProbe: PreviewNavigationProbe?
+        DispatchQueue.main.async {
+            let preview = DevicePreviewView(profile: BuiltinDevices.all[1])
+            let probe = PreviewNavigationProbe()
+            retainedPreview = preview
+            retainedProbe = probe
+            preview.delegate = probe
+            probe.didFinish = { _, url in
+                guard url?.standardizedFileURL == page.standardizedFileURL else { return }
+                preview.captureNetworkActivity { result in
+                    switch result {
+                    case .failure(let error):
+                        XCTFail("Could not capture resource activity: \(error)")
+                    case .success(let snapshot):
+                        let resourcesByName = Dictionary(
+                            snapshot.resources.map { (URL(string: $0.url)?.lastPathComponent ?? "", $0) },
+                            uniquingKeysWith: { first, _ in first }
+                        )
+                        XCTAssertEqual(resourcesByName["index.html"]?.status, .complete)
+                        XCTAssertEqual(resourcesByName["style.css"]?.status, .complete)
+                        XCTAssertEqual(resourcesByName["app.js"]?.status, .complete)
+                        XCTAssertEqual(resourcesByName["image.svg"]?.status, .complete)
+                        XCTAssertEqual(resourcesByName["missing.png"]?.status, .failed)
+                        XCTAssertEqual(snapshot.pendingCount, 0)
+                        XCTAssertEqual(snapshot.progress, 1)
+                    }
+                    captured.fulfill()
+                }
+            }
+            probe.didFail = { message in
+                XCTFail("Preview failed while capturing resource activity: \(message)")
+                captured.fulfill()
+            }
+            preview.loadLocalFile(page)
+        }
+
+        wait(for: [captured], timeout: 5)
+        withExtendedLifetime((retainedPreview, retainedProbe)) {}
+    }
+
     func testSafeAreaRotatesWithTheDevice() {
         let portrait = EdgeInsets(top: 62, right: 0, bottom: 34, left: 0)
 

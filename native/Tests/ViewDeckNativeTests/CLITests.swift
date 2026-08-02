@@ -57,6 +57,56 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(invocation.videoFPS, 30)
         XCTAssertFalse(invocation.showPreview)
         XCTAssertEqual(invocation.audioMode, .normal)
+        XCTAssertFalse(invocation.networkShapingConfiguration.enabled)
+    }
+
+    func testNetworkShapingOptionsParseForDirectAndReplayCommands() throws {
+        let direct = try CLIInvocation.parse([
+            "inspect", "https://example.com",
+            "--network-rtt-ms", "420",
+            "--network-jitter-ms", "35",
+            "--network-down-kbps", "1200",
+            "--network-up-kbps", "320",
+            "--network-seed", "99"
+        ])
+
+        XCTAssertTrue(direct.hasNetworkShapingOverride)
+        XCTAssertEqual(direct.networkShapingConfiguration, NetworkShapingConfiguration(
+            enabled: true,
+            roundTripTimeMilliseconds: 420,
+            jitterMilliseconds: 35,
+            downloadKilobitsPerSecond: 1_200,
+            uploadKilobitsPerSecond: 320,
+            offline: false,
+            seed: 99
+        ))
+
+        let replay = try CLIInvocation.parse([
+            "qa", "replay", "/tmp/gameplay.viewdeck.json",
+            "--network-offline"
+        ])
+        XCTAssertTrue(replay.hasNetworkShapingOverride)
+        XCTAssertTrue(replay.networkShapingConfiguration.enabled)
+        XCTAssertTrue(replay.networkShapingConfiguration.offline)
+    }
+
+    func testNetworkShapingRejectsInvalidValues() {
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect", "https://example.com",
+            "--network-rtt-ms", "-1"
+        ]))
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect", "https://example.com",
+            "--network-seed", "2.5"
+        ]))
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect", "https://example.com",
+            "--network-down-kbps", "inf"
+        ]))
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect", "https://example.com",
+            "--network-seed", "18446744073709551615"
+        ]))
     }
 
     func testHiddenPreviewParsesSilentAudioVerification() throws {

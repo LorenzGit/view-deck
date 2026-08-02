@@ -6,6 +6,7 @@ struct ViewDeckPreferences {
         static let landscape = "viewdeck.native.landscape"
         static let inspectorTab = "viewdeck.native.inspector-tab"
         static let projectFolder = "viewdeck.native.project-folder"
+        static let networkShaping = "viewdeck.native.network-shaping"
     }
 
     private let defaults: UserDefaults
@@ -29,6 +30,25 @@ struct ViewDeckPreferences {
     var inspectorTabIndex: Int {
         get { defaults.integer(forKey: Key.inspectorTab) }
         nonmutating set { defaults.set(newValue, forKey: Key.inspectorTab) }
+    }
+
+    var networkShapingConfiguration: NetworkShapingConfiguration {
+        get {
+            guard let data = defaults.data(forKey: Key.networkShaping),
+                  let configuration = try? JSONDecoder().decode(
+                    NetworkShapingConfiguration.self,
+                    from: data
+                  ) else {
+                return .disabled
+            }
+            return configuration.normalized
+        }
+        nonmutating set {
+            let configuration = newValue.normalized
+            if let data = try? JSONEncoder().encode(configuration) {
+                defaults.set(data, forKey: Key.networkShaping)
+            }
+        }
     }
 
     func inspectorTabIndex(segmentCount: Int) -> Int {

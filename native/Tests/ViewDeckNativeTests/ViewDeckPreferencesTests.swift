@@ -40,6 +40,26 @@ final class ViewDeckPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 5), 0)
     }
 
+    func testPersistsNetworkShapingConfiguration() {
+        let preferences = ViewDeckPreferences(defaults: defaults)
+        let configuration = NetworkShapingConfiguration(
+            enabled: true,
+            roundTripTimeMilliseconds: 420,
+            jitterMilliseconds: 35,
+            downloadKilobitsPerSecond: 1_200,
+            uploadKilobitsPerSecond: 320,
+            offline: false,
+            seed: 99
+        )
+
+        preferences.networkShapingConfiguration = configuration
+
+        XCTAssertEqual(
+            ViewDeckPreferences(defaults: defaults).networkShapingConfiguration,
+            configuration
+        )
+    }
+
     func testRestoresExistingProjectDirectory() throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("ViewDeckPreferencesTests-\(UUID().uuidString)", isDirectory: true)

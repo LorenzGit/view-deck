@@ -26,6 +26,11 @@ dist/native/viewdeck capabilities --json
 dist/native/viewdeck devices list --json
 ```
 
+When the task requests slow, constrained, or offline networking, require a
+`networkShaping` capability containing round-trip latency, jitter, download and
+upload bandwidth, offline mode, and deterministic seeds. Do not substitute a
+fixed replay delay for network shaping.
+
 Use absolute source and output paths. Create a uniquely named temporary
 directory outside the tested repository, keep all generated scenarios and
 artifacts there, and report that directory to the user. Do not commit QA
@@ -50,11 +55,13 @@ run. Do not add a second cache-reset mechanism.
 ## Keep agent runs invisible
 
 CLI previews are hidden by default. ViewDeck keeps the ordered WKWebView panel
-outside every connected display and uses WebKit snapshot capture, so agents can
-replay input and collect screenshots or video without exposing a mini preview
-to the user. Do not pass `--show-preview` unless the user explicitly asks to
-watch the run. Rendering diagnostics do not authorize an agent to expose the
-preview; use hidden screenshots, video, reports, and page diagnostics instead.
+outside every connected display and disables WebKit window-occlusion detection
+for that preview so animation and GPU rendering remain active. Artifacts use
+the app's own-window compositor, so agents can replay input and collect
+screenshots or video without exposing a mini preview to the user. Do not pass
+`--show-preview` unless the user explicitly asks to watch the run. Rendering
+diagnostics do not authorize an agent to expose the preview; use hidden
+screenshots, video, reports, and page diagnostics instead.
 
 Pass `--audio verify-silent` for every hidden `capture`, `inspect`, `record`,
 and `qa replay` run. This mutes the WebKit page output while its media timeline
@@ -69,7 +76,8 @@ For `capture`, `inspect`, `record`, and `qa replay`, confirm the report contains
   "preview": {
     "visibility": "hidden",
     "windowIntersectsDisplay": false,
-    "captureBackend": "webkitSnapshot"
+    "captureBackend": "windowCompositor",
+    "offscreenRenderingEnabled": true
   },
   "audio": {
     "mode": "verify-silent",
@@ -79,10 +87,11 @@ For `capture`, `inspect`, `record`, and `qa replay`, confirm the report contains
 }
 ```
 
-Treat an unexpected visible preview or display intersection as a failed hidden
-run. Hidden video may contain fewer frames than the requested FPS when WebKit
-snapshot capture cannot keep up; inspect actual MP4 duration and representative
-frames rather than requiring every scheduled frame.
+Treat an unexpected visible preview, display intersection, or disabled
+offscreen rendering as a failed hidden run. Hidden video may contain fewer
+frames than the requested FPS when compositor capture cannot keep up; inspect
+actual MP4 duration and representative frames rather than requiring every
+scheduled frame.
 
 ## Choose and verify orientation
 
@@ -239,6 +248,71 @@ and may still write later screenshots or other artifacts. Never trust or act on
 dependent artifacts unless the replay report has top-level `ok: true` and no
 wait error in `errors`.
 
+## Shape network conditions
+
+Use explicit values rather than names such as "3G" or "poor Wi-Fi" unless the
+user supplied the exact profile values. Any network option enables the
+per-preview network transport:
+
+```bash
+dist/native/viewdeck inspect https://example.com \
+  --network-rtt-ms 400 \
+  --network-jitter-ms 40 \
+  --network-down-kbps 1500 \
+  --network-up-kbps 500 \
+  --network-seed 42 \
+  --timeout 60 \
+  --audio verify-silent \
+  --report /tmp/viewdeck-qa.example/network.json \
+  --json
+```
+
+- `--network-rtt-ms` is added round-trip latency and is split across upload and
+  download traffic.
+- `--network-jitter-ms` is seeded one-way plus-or-minus jitter. Always set
+  `--network-seed` when reproducibility matters.
+- `--network-down-kbps` and `--network-up-kbps` use kilobits per second; `0`
+  means unlimited.
+- `--network-offline` blocks proxy connections. On a direct command it is
+  expected to produce a navigation failure, so use it when that failure itself
+  is the test.
+- Increase `--timeout` enough to cover the deliberately slower navigation,
+  application readiness, and artifact capture.
+
+Pass the same network options to `qa template` to embed them in
+`configuration.network`. A replay restores the embedded conditions before the
+existing site-data reset and initial load. Network options passed directly to
+`qa replay` temporarily override the scenario for that run without rewriting
+the source JSON.
+
+Use `--speed 1` when wall-clock response under latency is part of the test.
+Smart replay may still be used when the assertion is semantic and input idle
+time is irrelevant; semantic waits continue to block on the shaped response.
+
+Require the report's top-level `network` object to match the requested values.
+For an online HTTP(S) run, also require `implementation` to be either
+`loopbackSOCKSv5Proxy` or `loopbackTCPBridge+SOCKSv5Proxy`,
+`trafficObserved: true`, `acceptedConnectionCount` to be greater than zero, and
+the relevant transferred byte count to be greater than zero. Inspect
+`network.activity`: require lifecycle `progress` to reach `1`, `pendingCount`
+to reach `0`, and explain every failed entry in `resources`. Treat resource
+duration and transfer-size fields as WebKit Resource Timing observations, not
+proxy measurements. For a local HTTP run, require
+`localOriginRemapped: true` and return its `requestedURL` and `transportURL` so
+origin-sensitive behavior is not hidden. Report the
+configured conditions and measured total run or wait time; do not describe the
+proxy's byte counters as per-request timing.
+
+Network shaping covers TCP traffic from the primary WKWebView without
+decrypting HTTPS. It does not shape HTTP/3/QUIC and does not simulate packet
+loss, radio scheduling, RF conditions, or cellular handoff. State those limits
+when they matter to the requested conclusion. WebKit bypasses its proxy for
+literal loopback destinations, so ViewDeck remaps local HTTP traffic through a
+loopback TCP bridge. Page code can observe that internal origin. Local HTTPS
+cannot use the bridge because changing its origin would invalidate the
+certificate; do not claim it was shaped unless the report counters prove that
+its traffic traversed the SOCKSv5 proxy.
+
 ## Author a scenario
 
 Generate the scenario before adding inputs. Never invent or copy the device
@@ -258,14 +332,15 @@ dist/native/viewdeck qa template \
 ```
 
 The generated file contains the exact source, device, orientation, resolution,
-DPR, safe area, Safari, header, footer, and side-layer configuration. Confirm
-`.configuration.orientation` and `.configuration.resolution` before adding
-events. Read
+DPR, safe area, Safari, network shaping, header, footer, and side-layer
+configuration. Confirm `.configuration.orientation`,
+`.configuration.resolution`, and `.configuration.network` before adding events.
+Read
 `authoring.eventExamples` from that file and adapt those current examples into
 the top-level `events` array:
 
 ```bash
-jq '{orientation: .configuration.orientation, resolution: .configuration.resolution, authoring: .authoring}' \
+jq '{orientation: .configuration.orientation, resolution: .configuration.resolution, network: .configuration.network, authoring: .authoring}' \
   /tmp/viewdeck-qa.example/gameplay.viewdeck.json
 ```
 
@@ -348,9 +423,12 @@ Treat the command exit status and JSON report as evidence, not the screenshot
 alone. Check:
 
 - top-level `ok` and `errors`
-- `preview.visibility`, `preview.windowIntersectsDisplay`, and
-  `preview.captureBackend`
+- `preview.visibility`, `preview.windowIntersectsDisplay`,
+  `preview.captureBackend`, and `preview.offscreenRenderingEnabled`
 - `audit.pageErrors`
+- `network`, including the effective conditions, proxy implementation,
+  `trafficObserved`, connection and byte counts, and every
+  `activity.resources[]` lifecycle
 - `audit.consoleMessages` and `audit.issues`
 - `audio.muteApplied`, `audio.everActive`, and every `audio.activeIntervals[]`
 - `audit.audio.mediaElements`, media errors/events, and Web Audio source starts
@@ -380,9 +458,10 @@ Return:
 
 1. The tested source, device, orientation, Safari/header/footer state, and
    preview visibility.
-2. The scenario and report paths.
-3. Every screenshot, checkpoint folder, and video path.
-4. Original and effective replay duration when smart timing was used.
-5. Concise failures or warnings with the responsible event/checkpoint.
+2. The effective network conditions and the proxy's TCP/HTTP3 scope.
+3. The scenario and report paths.
+4. Every screenshot, checkpoint folder, and video path.
+5. Original and effective replay duration when smart timing was used.
+6. Concise failures or warnings with the responsible event/checkpoint.
 
 Keep all temporary artifacts until the user has received their paths.

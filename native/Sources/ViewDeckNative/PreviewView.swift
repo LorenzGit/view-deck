@@ -1,11 +1,51 @@
 import AppKit
 import Foundation
+import Network
 import WebKit
 
 protocol DevicePreviewDelegate: AnyObject {
     func previewDidStartLoading()
     func previewDidFinishLoading(title: String?, url: URL?)
     func previewDidFail(_ message: String)
+}
+
+enum NetworkResourceStatus: String, Codable {
+    case pending
+    case complete
+    case failed
+}
+
+struct NetworkResourceActivity: Codable, Equatable {
+    var id: String
+    var url: String
+    var initiatorType: String
+    var status: NetworkResourceStatus
+    var startTimeMilliseconds: Double
+    var durationMilliseconds: Double?
+    var transferSizeBytes: Int?
+    var encodedBodySizeBytes: Int?
+    var decodedBodySizeBytes: Int?
+    var responseStatus: Int?
+    var fromCache: Bool
+    var error: String?
+}
+
+struct NetworkActivitySnapshot: Codable, Equatable {
+    var loading: Bool
+    var progress: Double
+    var pendingCount: Int
+    var completedCount: Int
+    var failedCount: Int
+    var resources: [NetworkResourceActivity]
+
+    static let empty = NetworkActivitySnapshot(
+        loading: false,
+        progress: 0,
+        pendingCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        resources: []
+    )
 }
 
 private final class QAScriptMessageHandler: NSObject, WKScriptMessageHandler {
@@ -137,6 +177,9 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private static let mobileBottomOverscan: CGFloat = 4
     private static let audioMonitorInterval: TimeInterval = 0.02
     private static let audioMutedFlag: UInt = 1
+    private static let primaryWebsiteDataStoreIdentifier = UUID(
+        uuidString: "2A94A7F7-99C0-4DCE-B61A-1422C18591C2"
+    )!
 
     private static func enableDeveloperTools(in configuration: WKWebViewConfiguration) {
         // WebKit does not expose a public API for opening Web Inspector from a
@@ -260,15 +303,41 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private var audioMonitoringStartedAt: Date?
     private var audioMonitoringStartedUptime: TimeInterval?
     private var audioActivityIntervals: [AudioActivityInterval] = []
+    private(set) var offscreenRenderingEnabled = false
+    private var networkProxy: NetworkShapingProxy?
+    private var networkBridgeSourceURL: URL?
+    private var networkBridgeURL: URL?
+    private(set) var networkShapingConfiguration: NetworkShapingConfiguration
+    private(set) var networkShapingSetupError: Error?
 
-    init(profile: DeviceProfile) {
+    init(
+        profile: DeviceProfile,
+        networkShapingConfiguration: NetworkShapingConfiguration = .disabled
+    ) {
         self.profile = profile
         self.safeArea = profile.safeArea
+        self.networkShapingConfiguration = networkShapingConfiguration.normalized
 
         let configuration = WKWebViewConfiguration()
         let qaScriptMessageHandler = QAScriptMessageHandler()
         self.qaScriptMessageHandler = qaScriptMessageHandler
-        configuration.websiteDataStore = .default()
+        let websiteDataStore = WKWebsiteDataStore(
+            forIdentifier: Self.primaryWebsiteDataStoreIdentifier
+        )
+        if networkShapingConfiguration.enabled {
+            let proxy = NetworkShapingProxy(configuration: networkShapingConfiguration)
+            do {
+                let port = try proxy.start()
+                websiteDataStore.proxyConfigurations = [Self.webKitProxyConfiguration(port: port)]
+                networkProxy = proxy
+            } catch {
+                websiteDataStore.proxyConfigurations = []
+                networkShapingSetupError = error
+            }
+        } else {
+            websiteDataStore.proxyConfigurations = []
+        }
+        configuration.websiteDataStore = websiteDataStore
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         configuration.preferences.isElementFullscreenEnabled = true
@@ -330,6 +399,113 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
     deinit {
         audioMonitorTimer?.invalidate()
+        if networkProxy != nil {
+            webView.configuration.websiteDataStore.proxyConfigurations = []
+        }
+        networkProxy?.stop()
+    }
+
+    @discardableResult
+    func enableOffscreenRendering() -> Bool {
+        let enabled = allWebViews
+            .map { Self.setWindowOcclusionDetectionEnabled(false, in: $0) }
+            .allSatisfy { $0 }
+        offscreenRenderingEnabled = enabled
+        return enabled
+    }
+
+    @discardableResult
+    func applyNetworkShapingConfiguration(
+        _ requestedConfiguration: NetworkShapingConfiguration,
+        reloadIfNeeded: Bool = true
+    ) -> Result<Void, Error> {
+        let configuration = requestedConfiguration.normalized
+        let previous = networkShapingConfiguration
+        let dataStore = webView.configuration.websiteDataStore
+        networkShapingSetupError = nil
+
+        if configuration.enabled {
+            if let networkProxy {
+                networkProxy.update(configuration: configuration)
+            } else {
+                let proxy = NetworkShapingProxy(configuration: configuration)
+                do {
+                    let port = try proxy.start()
+                    dataStore.proxyConfigurations = [Self.webKitProxyConfiguration(port: port)]
+                    networkProxy = proxy
+                } catch {
+                    networkShapingSetupError = error
+                    networkShapingConfiguration = previous
+                    return .failure(error)
+                }
+            }
+        } else {
+            dataStore.proxyConfigurations = []
+            networkProxy?.stop()
+            networkProxy = nil
+        }
+
+        networkShapingConfiguration = configuration
+        if reloadIfNeeded,
+           let currentURL,
+           (previous.enabled != configuration.enabled || previous.offline != configuration.offline) {
+            load(currentURL.absoluteString, bypassCache: true, resetSiteData: false)
+        }
+        return .success(())
+    }
+
+    var networkShapingStatus: String {
+        if let networkShapingSetupError {
+            return networkShapingSetupError.localizedDescription
+        }
+        guard networkShapingConfiguration.enabled else { return "Disabled" }
+        if networkShapingConfiguration.offline { return "Offline · connections blocked" }
+        let report = networkProxy?.report(configuration: networkShapingConfiguration)
+        guard networkProxy?.port != nil else { return "Starting…" }
+        return report?["trafficObserved"] as? Bool == true
+            ? "Verified · shaped TCP traffic observed"
+            : "Ready · no shaped traffic observed yet"
+    }
+
+    func networkShapingReport() -> [String: Any] {
+        if let networkProxy {
+            var report = networkProxy.report(configuration: networkShapingConfiguration)
+            if let source = networkBridgeSourceURL, let bridge = networkBridgeURL {
+                report["localOriginRemapped"] = true
+                report["requestedURL"] = source.absoluteString
+                report["transportURL"] = bridge.absoluteString
+            } else {
+                report["localOriginRemapped"] = false
+            }
+            return report
+        }
+        var report = networkShapingConfiguration.reportDictionary
+        report["implementation"] = "none"
+        report["proxyPort"] = 0
+        report["acceptedConnectionCount"] = 0
+        report["activeConnectionCount"] = 0
+        report["uploadedBytes"] = 0
+        report["downloadedBytes"] = 0
+        report["trafficObserved"] = false
+        report["transportScope"] = "TCP traffic from the primary WKWebView"
+        report["http3QUICShaped"] = false
+        report["localOriginRemapped"] = false
+        if let networkShapingSetupError {
+            report["setupError"] = networkShapingSetupError.localizedDescription
+        }
+        return report
+    }
+
+    private static func webKitProxyConfiguration(port: NWEndpoint.Port) -> ProxyConfiguration {
+        var configuration = ProxyConfiguration(
+            socksv5Proxy: .hostPort(host: "127.0.0.1", port: port)
+        )
+        configuration.allowFailover = false
+        // WebKit bypasses literal loopback destinations; shapedURL(for:) routes
+        // local HTTP previews through a raw TCP bridge instead.
+        configuration.matchDomains = [""]
+        configuration.excludedDomains = []
+        return configuration
     }
 
     var logicalViewportSize: CGSize {
@@ -434,10 +610,29 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             )
             return
         }
+        let requestURL: URL
+        do {
+            requestURL = try networkProxy?.shapedURL(for: url) ?? url
+        } catch {
+            networkShapingSetupError = error
+            showNavigationFailure(
+                message: "The local network shaping bridge could not start.",
+                reportMessage: error.localizedDescription
+            )
+            return
+        }
+        if requestURL == url {
+            networkBridgeSourceURL = nil
+            networkBridgeURL = nil
+        } else {
+            networkBridgeSourceURL = url
+            networkBridgeURL = requestURL
+        }
+
         navigationGeneration &+= 1
         let generation = navigationGeneration
         safariTop.address = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString
-        let request = PreviewNavigationPolicy.request(for: url, bypassCache: bypassCache)
+        let request = PreviewNavigationPolicy.request(for: requestURL, bypassCache: bypassCache)
         let performLoad = { [weak self] in
             guard let self,
                   self.navigationGeneration == generation else { return }
@@ -446,10 +641,38 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             self.webView.load(request)
         }
         if resetSiteData {
-            clearWebsiteData(for: url, completion: performLoad)
+            clearWebsiteData(for: requestURL, completion: performLoad)
         } else {
             performLoad()
         }
+    }
+
+    private func displayURL(for loadedURL: URL) -> URL {
+        guard let source = networkBridgeSourceURL,
+              let bridge = networkBridgeURL,
+              loadedURL.scheme?.lowercased() == bridge.scheme?.lowercased(),
+              loadedURL.host?.lowercased() == bridge.host?.lowercased(),
+              loadedURL.port == bridge.port,
+              var components = URLComponents(url: loadedURL, resolvingAgainstBaseURL: false) else {
+            return loadedURL
+        }
+        components.host = source.host
+        components.port = source.port
+        return components.url ?? loadedURL
+    }
+
+    private func displayNetworkURLs(in snapshot: [String: Any]) -> [String: Any] {
+        var mapped = snapshot
+        guard let resources = snapshot["resources"] as? [[String: Any]] else { return mapped }
+        mapped["resources"] = resources.map { resource in
+            var resource = resource
+            if let rawURL = resource["url"] as? String,
+               let url = URL(string: rawURL) {
+                resource["url"] = displayURL(for: url).absoluteString
+            }
+            return resource
+        }
+        return mapped
     }
 
     func loadLocalFile(_ file: URL, resetSiteData: Bool = false) {
@@ -472,6 +695,11 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     func reload() {
         rebuildEnvironment(reload: false)
         webView.reload()
+    }
+
+    func reloadFromOrigin() {
+        guard let currentURL else { return }
+        load(currentURL.absoluteString, bypassCache: true, resetSiteData: false)
     }
 
     func showWebInspector() {
@@ -576,7 +804,61 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                     completion(.failure(PreviewInspectionError.invalidResult))
                     return
                 }
-                completion(.success(object))
+                var report = object
+                if let rawURL = report["url"] as? String,
+                   let url = URL(string: rawURL) {
+                    report["url"] = self.displayURL(for: url).absoluteString
+                }
+                if let network = report["network"] as? [String: Any] {
+                    report["network"] = self.displayNetworkURLs(in: network)
+                }
+                completion(.success(report))
+            }
+        }
+    }
+
+    func captureNetworkActivity(
+        completion: @escaping (Result<NetworkActivitySnapshot, Error>) -> Void
+    ) {
+        evaluateJavaScript(
+            "JSON.stringify(window.__VIEWDECK_DIAGNOSTICS__?.network?.snapshot?.() ?? null)"
+        ) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let value):
+                guard let encoded = value as? String,
+                      encoded != "null",
+                      let data = encoded.data(using: .utf8),
+                      var snapshot = try? JSONDecoder().decode(
+                        NetworkActivitySnapshot.self,
+                        from: data
+                      ) else {
+                    completion(.success(.empty))
+                    return
+                }
+                snapshot.resources = snapshot.resources.map { resource in
+                    guard let url = URL(string: resource.url) else { return resource }
+                    var mapped = resource
+                    mapped.url = self.displayURL(for: url).absoluteString
+                    return mapped
+                }
+                completion(.success(snapshot))
+            }
+        }
+    }
+
+    func captureNetworkActivitySignature(
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        evaluateJavaScript(
+            "window.__VIEWDECK_DIAGNOSTICS__?.network?.signature?.() ?? ''"
+        ) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let value):
+                completion(.success(value as? String ?? ""))
             }
         }
     }
@@ -635,7 +917,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
               captureBounds.height > 0,
               let window,
               window.windowNumber > 0 else {
-            captureScreenshot(scale: captureScale, completion: completion)
+            completion(.failure(PreviewScreenshotError.windowCompositorUnavailable))
             return
         }
 
@@ -643,7 +925,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         let frameOnScreen = window.convertToScreen(frameInWindow)
         let windowFrame = window.frame
         guard windowFrame.width > 0, windowFrame.height > 0 else {
-            captureScreenshot(scale: captureScale, completion: completion)
+            completion(.failure(PreviewScreenshotError.windowCompositorUnavailable))
             return
         }
         let windowNumber = CGWindowID(window.windowNumber)
@@ -660,7 +942,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                 options
             ) else {
                 DispatchQueue.main.async {
-                    self.captureScreenshot(scale: captureScale, completion: completion)
+                    completion(.failure(PreviewScreenshotError.windowCompositorUnavailable))
                 }
                 return
             }
@@ -689,7 +971,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                       pixelsHigh: targetHeight
                   ) else {
                 DispatchQueue.main.async {
-                    self.captureScreenshot(scale: captureScale, completion: completion)
+                    completion(.failure(PreviewScreenshotError.windowCompositorUnavailable))
                 }
                 return
             }
@@ -1298,6 +1580,9 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         if silentAudioVerificationEnabled {
             _ = Self.setPageAudioMuted(true, in: layerView)
         }
+        if offscreenRenderingEnabled {
+            _ = Self.setWindowOcclusionDetectionEnabled(false, in: layerView)
+        }
         viewportClip.addSubview(layerView)
         return layerView
     }
@@ -1395,6 +1680,23 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
         let getter = unsafeBitCast(webView.method(for: selector), to: Getter.self)
         return getter(webView, selector)
+    }
+
+    private static func setWindowOcclusionDetectionEnabled(
+        _ enabled: Bool,
+        in webView: WKWebView
+    ) -> Bool {
+        let setterSelector = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        let getterSelector = NSSelectorFromString("_windowOcclusionDetectionEnabled")
+        guard webView.responds(to: setterSelector),
+              webView.responds(to: getterSelector) else { return false }
+
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+        let setter = unsafeBitCast(webView.method(for: setterSelector), to: Setter.self)
+        let getter = unsafeBitCast(webView.method(for: getterSelector), to: Getter.self)
+        setter(webView, setterSelector, enabled)
+        return getter(webView, getterSelector) == enabled
     }
 
     private func schedulePageEnvironmentUpdate(orientationChanged: Bool) {
@@ -2465,6 +2767,245 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         if (collection.length > 200) collection.splice(0, collection.length - 200);
       };
 
+      const networkRecords = [];
+      const pendingNetworkRecords = new Map();
+      const completedPerformanceEntries = new Set();
+      const elementNetworkRecords = new WeakMap();
+      const xhrNetworkRecords = new WeakMap();
+      let networkSequence = 0;
+      let networkRevision = 0;
+      const rounded = (value) => Math.round(Number(value || 0) * 100) / 100;
+      const absoluteURL = (value) => {
+        if (!value) return null;
+        try {
+          const url = new URL(String(value), location.href);
+          return ['http:', 'https:', 'file:'].includes(url.protocol) ? url.href : null;
+        } catch { return null; }
+      };
+      const networkKey = (url, initiatorType) => `${initiatorType}|${url}`;
+      const trimNetworkRecords = () => {
+        while (networkRecords.length > 500) {
+          const index = networkRecords.findIndex((record) => record.status !== 'pending');
+          if (index < 0) break;
+          networkRecords.splice(index, 1);
+        }
+      };
+      const beginNetworkRecord = (value, initiatorType, startTime = performance.now()) => {
+        const url = absoluteURL(value);
+        if (!url) return null;
+        const type = initiatorType || 'other';
+        const key = networkKey(url, type);
+        const existing = pendingNetworkRecords.get(key);
+        if (existing) return existing;
+        const record = {
+          id: String(++networkSequence),
+          url,
+          initiatorType: type,
+          status: 'pending',
+          startTimeMilliseconds: rounded(startTime),
+          durationMilliseconds: null,
+          transferSizeBytes: null,
+          encodedBodySizeBytes: null,
+          decodedBodySizeBytes: null,
+          responseStatus: null,
+          fromCache: false,
+          error: null
+        };
+        networkRecords.push(record);
+        pendingNetworkRecords.set(key, record);
+        trimNetworkRecords();
+        networkRevision += 1;
+        return record;
+      };
+      const finishNetworkRecord = (record, status, details = {}) => {
+        if (!record) return;
+        Object.assign(record, details, { status });
+        if (record.durationMilliseconds == null) {
+          record.durationMilliseconds = rounded(performance.now() - record.startTimeMilliseconds);
+        }
+        pendingNetworkRecords.delete(networkKey(record.url, record.initiatorType));
+        networkRevision += 1;
+      };
+      const completePerformanceEntry = (entry) => {
+        const entryKey = `${entry.entryType}|${entry.name}|${entry.startTime}|${entry.duration}`;
+        if (completedPerformanceEntries.has(entryKey)) return;
+        completedPerformanceEntries.add(entryKey);
+        const type = entry.entryType === 'navigation'
+          ? 'document'
+          : (entry.initiatorType || 'other');
+        const url = absoluteURL(entry.name || location.href);
+        if (!url) return;
+        const key = networkKey(url, type);
+        const record = pendingNetworkRecords.get(key)
+          || [...networkRecords].reverse().find((candidate) =>
+            candidate.url === url && candidate.initiatorType === type &&
+            Math.abs(candidate.startTimeMilliseconds - entry.startTime) < 250
+          )
+          || beginNetworkRecord(url, type, entry.startTime);
+        const observedResponseStatus = Number.isFinite(entry.responseStatus) && entry.responseStatus > 0
+          ? entry.responseStatus
+          : null;
+        const responseStatus = observedResponseStatus ?? record?.responseStatus ?? null;
+        const failed = record?.status === 'failed' || (responseStatus != null && responseStatus >= 400);
+        finishNetworkRecord(record, failed ? 'failed' : 'complete', {
+          startTimeMilliseconds: rounded(entry.startTime),
+          durationMilliseconds: rounded(entry.duration),
+          transferSizeBytes: Number.isFinite(entry.transferSize) ? entry.transferSize : null,
+          encodedBodySizeBytes: Number.isFinite(entry.encodedBodySize) ? entry.encodedBodySize : null,
+          decodedBodySizeBytes: Number.isFinite(entry.decodedBodySize) ? entry.decodedBodySize : null,
+          responseStatus,
+          fromCache: entry.transferSize === 0 && entry.decodedBodySize > 0,
+          error: responseStatus != null && responseStatus >= 400
+            ? `HTTP ${responseStatus}`
+            : (record?.error || null)
+        });
+      };
+      const elementRequest = (element) => {
+        if (!(element instanceof Element)) return null;
+        let value = null;
+        let type = element.localName || 'other';
+        if (element instanceof HTMLLinkElement) {
+          const resourceRels = new Set([
+            'stylesheet', 'preload', 'modulepreload', 'icon', 'manifest', 'prefetch'
+          ]);
+          const rels = Array.from(element.relList || []);
+          if (!rels.some((rel) => resourceRels.has(rel))) return null;
+          value = element.href;
+        }
+        else if (element instanceof HTMLImageElement) value = element.currentSrc || element.src;
+        else if (element instanceof HTMLScriptElement) value = element.src;
+        else if (element instanceof HTMLIFrameElement) value = element.src;
+        else if (element instanceof HTMLMediaElement) value = element.currentSrc || element.src;
+        else if (element instanceof HTMLSourceElement) {
+          value = element.src;
+          if (element.parentElement instanceof HTMLPictureElement) type = 'img';
+          else if (element.parentElement instanceof HTMLVideoElement) type = 'video';
+          else if (element.parentElement instanceof HTMLAudioElement) type = 'audio';
+        }
+        else if (element instanceof HTMLObjectElement) value = element.data;
+        else if (element instanceof HTMLEmbedElement) value = element.src;
+        if (!value) return null;
+        return { value, type };
+      };
+      const watchElement = (element) => {
+        const request = elementRequest(element);
+        if (!request) return;
+        const record = beginNetworkRecord(request.value, request.type);
+        if (record) elementNetworkRecords.set(element, record);
+      };
+      const scanNetworkElements = (node) => {
+        if (!(node instanceof Element)) return;
+        watchElement(node);
+        for (const element of node.querySelectorAll(
+          'link[href],img[src],script[src],iframe[src],audio[src],video[src],source[src],object[data],embed[src]'
+        )) watchElement(element);
+      };
+
+      beginNetworkRecord(location.href, 'document', 0);
+      try { performance.setResourceTimingBufferSize(2000); } catch {}
+      try {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) completePerformanceEntry(entry);
+        }).observe({ entryTypes: ['navigation', 'resource'] });
+      } catch {}
+
+      new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (mutation.type === 'attributes') watchElement(mutation.target);
+          for (const node of mutation.addedNodes) scanNetworkElements(node);
+        }
+      }).observe(document, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['src', 'srcset', 'href', 'data']
+      });
+      document.addEventListener('load', (event) => {
+        if (event.target === document) return;
+        const record = elementNetworkRecords.get(event.target);
+        finishNetworkRecord(record, 'complete');
+      }, true);
+      document.addEventListener('error', (event) => {
+        const record = elementNetworkRecords.get(event.target);
+        finishNetworkRecord(record, 'failed', { error: 'Resource failed to load' });
+      }, true);
+
+      const nativeFetch = window.fetch;
+      if (typeof nativeFetch === 'function') {
+        window.fetch = function(input, init) {
+          const record = beginNetworkRecord(input instanceof Request ? input.url : input, 'fetch');
+          return Reflect.apply(nativeFetch, this, arguments).then(
+            (response) => {
+              const responseStatus = response.status || null;
+              const failed = responseStatus != null && responseStatus >= 400;
+              finishNetworkRecord(record, failed ? 'failed' : 'complete', {
+                responseStatus,
+                error: failed ? `HTTP ${responseStatus}` : null
+              });
+              return response;
+            },
+            (error) => {
+              finishNetworkRecord(record, 'failed', { error: String(error?.message || error) });
+              throw error;
+            }
+          );
+        };
+      }
+
+      const nativeXHROpen = XMLHttpRequest.prototype.open;
+      const nativeXHRSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        xhrNetworkRecords.set(this, { url: absoluteURL(url), record: null });
+        return Reflect.apply(nativeXHROpen, this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function() {
+        const state = xhrNetworkRecords.get(this) || { url: null, record: null };
+        state.record = beginNetworkRecord(state.url, 'xmlhttprequest');
+        xhrNetworkRecords.set(this, state);
+        this.addEventListener('loadend', () => {
+          const failed = this.status === 0 || this.status >= 400;
+          finishNetworkRecord(state.record, failed ? 'failed' : 'complete', {
+            responseStatus: this.status || null,
+            error: failed ? (this.status ? `HTTP ${this.status}` : 'Request failed') : null
+          });
+        }, { once: true });
+        return Reflect.apply(nativeXHRSend, this, arguments);
+      };
+
+      diagnostics.network = {
+        signature() {
+          return `${performance.timeOrigin}|${networkRevision}`;
+        },
+        snapshot() {
+          for (const entry of performance.getEntriesByType('navigation')) {
+            completePerformanceEntry(entry);
+          }
+          for (const entry of performance.getEntriesByType('resource')) {
+            completePerformanceEntry(entry);
+          }
+          const resources = networkRecords
+            .map((record) => ({ ...record }))
+            .sort((left, right) => {
+              if (left.status === 'pending' && right.status !== 'pending') return -1;
+              if (right.status === 'pending' && left.status !== 'pending') return 1;
+              return right.startTimeMilliseconds - left.startTimeMilliseconds;
+            });
+          const pendingCount = resources.filter((record) => record.status === 'pending').length;
+          const completedCount = resources.filter((record) => record.status === 'complete').length;
+          const failedCount = resources.filter((record) => record.status === 'failed').length;
+          const finishedCount = completedCount + failedCount;
+          const progress = resources.length > 0 ? finishedCount / resources.length : 0;
+          return {
+            loading: document.readyState !== 'complete' || pendingCount > 0,
+            progress: Math.max(0, Math.min(1, progress)),
+            pendingCount,
+            completedCount,
+            failedCount,
+            resources
+          };
+        }
+      };
+
       for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
         const original = console[level];
         if (typeof original !== 'function') continue;
@@ -2778,6 +3319,14 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
           webAudioEvents: diagnostics.audio?.webAudioEvents || [],
           speechEvents: diagnostics.audio?.speechEvents || []
         },
+        network: diagnostics.network?.snapshot?.() || {
+          loading: false,
+          progress: 0,
+          pendingCount: 0,
+          completedCount: 0,
+          failedCount: 0,
+          resources: []
+        },
         consoleMessages: diagnostics.consoleMessages || [],
         pageErrors: diagnostics.pageErrors || []
       });
@@ -2807,9 +3356,11 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                 reportMessage: "WebKit replaced the requested URL with a blank page."
             )
         } else if currentURL != nil, let url = webView.url {
-            currentURL = url
-            safariTop.address = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.lastPathComponent
-            delegate?.previewDidFinishLoading(title: webView.title, url: url)
+            let displayURL = displayURL(for: url)
+            currentURL = displayURL
+            safariTop.address = displayURL.host?.replacingOccurrences(of: "www.", with: "")
+                ?? displayURL.lastPathComponent
+            delegate?.previewDidFinishLoading(title: webView.title, url: displayURL)
         } else {
             delegate?.previewDidFinishLoading(title: webView.title, url: nil)
         }
@@ -2826,8 +3377,10 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
         if PreviewNavigationPolicy.shouldOpenInCurrentPreview(url) {
             navigationGeneration &+= 1
-            currentURL = url
-            safariTop.address = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.lastPathComponent
+            let displayURL = displayURL(for: url)
+            currentURL = displayURL
+            safariTop.address = displayURL.host?.replacingOccurrences(of: "www.", with: "")
+                ?? displayURL.lastPathComponent
             webView.load(navigationAction.request)
         } else {
             NSWorkspace.shared.open(url)
@@ -2854,9 +3407,15 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
 private enum PreviewScreenshotError: LocalizedError {
     case renderFailed
+    case windowCompositorUnavailable
 
     var errorDescription: String? {
-        "ViewDeck could not render the current device into an image."
+        switch self {
+        case .renderFailed:
+            return "ViewDeck could not render the current device into an image."
+        case .windowCompositorUnavailable:
+            return "ViewDeck could not capture the preview window's compositor surface."
+        }
     }
 }
 
@@ -2935,8 +3494,14 @@ private final class PreviewScreenshotCompositor: FlippedView {
 final class PreviewCanvasView: FlippedView {
     let preview: DevicePreviewView
 
-    init(profile: DeviceProfile) {
-        preview = DevicePreviewView(profile: profile)
+    init(
+        profile: DeviceProfile,
+        networkShapingConfiguration: NetworkShapingConfiguration = .disabled
+    ) {
+        preview = DevicePreviewView(
+            profile: profile,
+            networkShapingConfiguration: networkShapingConfiguration
+        )
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor(hex: 0x0d141c).cgColor

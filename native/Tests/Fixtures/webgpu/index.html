@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ViewDeck WebGPU regression fixture</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #19002c; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+    #status {
+      position: fixed;
+      z-index: 1;
+      top: 16px;
+      left: 16px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.72);
+      color: white;
+      font: 600 14px/1.2 ui-monospace, monospace;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gpu"></canvas>
+  <div id="status">WEBGPU STARTING</div>
+  <script>
+    (async () => {
+      const status = document.querySelector('#status');
+      const canvas = document.querySelector('#gpu');
+      const finish = (value, error) => {
+        document.documentElement.dataset.webgpuStatus = value;
+        status.textContent = value === 'ready' ? 'WEBGPU READY' : `WEBGPU ${String(error)}`;
+      };
+
+      try {
+        if (!navigator.gpu) throw new Error('UNAVAILABLE');
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error('NO ADAPTER');
+        const device = await adapter.requestDevice();
+        const context = canvas.getContext('webgpu');
+        if (!context) throw new Error('NO CONTEXT');
+
+        canvas.width = Math.max(1, Math.round(innerWidth * devicePixelRatio));
+        canvas.height = Math.max(1, Math.round(innerHeight * devicePixelRatio));
+        context.configure({
+          device,
+          format: navigator.gpu.getPreferredCanvasFormat(),
+          alphaMode: 'opaque'
+        });
+
+        let renderedFrames = 0;
+        const render = (time) => {
+          const encoder = device.createCommandEncoder();
+          const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: context.getCurrentTexture().createView(),
+              clearValue: {
+                r: 0.02,
+                g: 0.68 + 0.2 * ((time % 2000) / 2000),
+                b: 0.24,
+                a: 1
+              },
+              loadOp: 'clear',
+              storeOp: 'store'
+            }]
+          });
+          pass.end();
+          device.queue.submit([encoder.finish()]);
+          renderedFrames += 1;
+          document.documentElement.dataset.webgpuFrame = String(renderedFrames);
+          if (renderedFrames === 1) {
+            device.queue.onSubmittedWorkDone()
+              .then(() => requestAnimationFrame(() => finish('ready')))
+              .catch((error) => finish('failed', error?.message || error));
+          }
+          requestAnimationFrame(render);
+        };
+        requestAnimationFrame(render);
+      } catch (error) {
+        finish('failed', error?.message || error);
+      }
+    })();
+  </script>
+</body>
+</html>

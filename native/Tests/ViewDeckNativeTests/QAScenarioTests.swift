@@ -522,6 +522,15 @@ final class QAScenarioTests: XCTestCase {
                 topChromeCSSPixels: 0,
                 bottomChromeCSSPixels: 0
             ),
+            network: NetworkShapingConfiguration(
+                enabled: true,
+                roundTripTimeMilliseconds: 420,
+                jitterMilliseconds: 35,
+                downloadKilobitsPerSecond: 1_200,
+                uploadKilobitsPerSecond: 320,
+                offline: false,
+                seed: 99
+            ),
             header: emptyHeader,
             footer: footer
         )
@@ -582,6 +591,8 @@ final class QAScenarioTests: XCTestCase {
         XCTAssertEqual(decoded.configuration.safeArea.orientedDevice.right, 34)
         XCTAssertTrue(decoded.configuration.safeArea.guideVisible)
         XCTAssertFalse(decoded.configuration.safari.enabled)
+        XCTAssertEqual(decoded.configuration.network?.roundTripTimeMilliseconds, 420)
+        XCTAssertEqual(decoded.configuration.network?.seed, 99)
         XCTAssertTrue(decoded.configuration.footer.enabled)
         XCTAssertEqual(decoded.configuration.footer.html, "<footer>Controls</footer>")
     }

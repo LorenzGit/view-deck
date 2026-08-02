@@ -33,7 +33,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private let widthField = NSTextField()
     private let heightField = NSTextField()
     private let addressField = NSTextField()
-    private let inspectorTabs = DeckSegmentedControl(labels: ["Device", "Safe area", "Layers", "Server", "Ports"], trackingMode: .selectOne, target: nil, action: nil)
+    private let inspectorTabs = DeckSegmentedControl(labels: ["Device", "Safe area", "Layers", "Server", "Ports", "Network"], trackingMode: .selectOne, target: nil, action: nil)
     private let inspectorScroll = NSScrollView()
     private let inspectorStack = DeckFillStackView()
     private let projectButton = DeckButton(frame: .zero)
@@ -60,6 +60,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var localhostScanInProgress = false
     private var localhostScanError: String?
     private var localhostRefreshTimer: Timer?
+    private var networkActivityTimer: Timer?
+    private var networkActivityRefreshInFlight = false
+    private var networkActivitySignature: String?
+    private var networkActivitySnapshot = NetworkActivitySnapshot.empty
+    private weak var networkStatusValue: NSTextField?
+    private weak var networkConnectionsValue: NSTextField?
+    private weak var networkActivitySummary: NSTextField?
+    private weak var networkActivityProgress: NSProgressIndicator?
+    private weak var networkResourceStack: NSStackView?
+    private weak var networkReloadButton: NSButton?
     private var sampleHeaderEnabled = false
     private var sampleLeftEnabled = false
     private var sampleRightEnabled = false
@@ -131,7 +141,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let selectedID = preferences.selectedDeviceID
         let initialDevices = BuiltinDevices.all + DeviceStore.load()
         selectedIndex = initialDevices.firstIndex(where: { $0.id == selectedID }) ?? 0
-        let canvas = PreviewCanvasView(profile: initialDevices[selectedIndex])
+        let canvas = PreviewCanvasView(
+            profile: initialDevices[selectedIndex],
+            networkShapingConfiguration: preferences.networkShapingConfiguration
+        )
         canvas.preview.landscape = preferences.isLandscape
         self.canvas = canvas
 
@@ -168,6 +181,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     func stopServices() {
         localhostRefreshTimer?.invalidate()
         localhostRefreshTimer = nil
+        networkActivityTimer?.invalidate()
+        networkActivityTimer = nil
         standaloneVideoRecorder?.stop()
         server.stop()
     }
@@ -385,6 +400,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         inspectorTabs.selectionChanged = { [weak self] in
             self?.rebuildInspector()
             self?.updateLocalhostMonitoring()
+            self?.updateNetworkMonitoring()
         }
         inspectorTabs.target = self
         inspectorTabs.action = #selector(inspectorTabChanged)
@@ -393,6 +409,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         inspectorTabs.setToolTip("Add optional HTML layers around the page", forSegment: 2)
         inspectorTabs.setToolTip("Preview static HTML or run a local command", forSegment: 3)
         inspectorTabs.setToolTip("Inspect processes listening on localhost ports", forSegment: 4)
+        inspectorTabs.setToolTip("Simulate deterministic latency and bandwidth", forSegment: 5)
         inspectorTabs.translatesAutoresizingMaskIntoConstraints = false
         inspector.addSubview(inspectorTabs)
 
@@ -429,15 +446,24 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             inspectorStack.bottomAnchor.constraint(equalTo: document.bottomAnchor)
         ])
         rebuildInspector()
+        updateLocalhostMonitoring()
+        updateNetworkMonitoring()
     }
 
     private func rebuildInspector() {
+        networkStatusValue = nil
+        networkConnectionsValue = nil
+        networkActivitySummary = nil
+        networkActivityProgress = nil
+        networkResourceStack = nil
+        networkReloadButton = nil
         inspectorStack.arrangedSubviews.forEach { inspectorStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         switch inspectorTabs.selectedSegment {
         case 1: buildSafeAreaInspector()
         case 2: buildLayersInspector()
         case 3: buildServerInspector()
         case 4: buildPortsInspector()
+        case 5: buildNetworkInspector()
         default: buildDeviceInspector()
         }
     }
@@ -498,6 +524,104 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             cardDivider(),
             helpText("The guide is visual only. Leave Force page inside safe area off for a full-bleed game; turn it on to make WebKit shrink and adjust page layout around both obscured edges.")
         ]))
+    }
+
+    private func buildNetworkInspector() {
+        let configuration = canvas.preview.networkShapingConfiguration
+        inspectorStack.addArrangedSubview(inspectorHeading(
+            "Network shaping",
+            subtitle: "Deterministic TCP conditions for the primary page"
+        ))
+
+        let enabled = DeckCheckboxButton(
+            title: "Enable network shaping",
+            target: self,
+            action: #selector(networkShapingEnabledChanged(_:))
+        )
+        enabled.state = configuration.enabled ? .on : .off
+        let offline = DeckCheckboxButton(
+            title: "Offline",
+            target: self,
+            action: #selector(networkShapingOfflineChanged(_:))
+        )
+        offline.state = configuration.offline ? .on : .off
+        let report = canvas.preview.networkShapingReport()
+        let activeConnections = report["activeConnectionCount"] as? Int ?? 0
+        let acceptedConnections = report["acceptedConnectionCount"] as? Int ?? 0
+        let statusValue = inspectorInfoField(canvas.preview.networkShapingStatus)
+        let connectionsValue = inspectorInfoField(
+            "\(activeConnections) active · \(acceptedConnections) total"
+        )
+        networkStatusValue = statusValue
+        networkConnectionsValue = connectionsValue
+        inspectorStack.addArrangedSubview(sectionLabel("STATE"))
+        inspectorStack.addArrangedSubview(inspectorCard([
+            enabled,
+            offline,
+            cardDivider(),
+            formRow("Status", field: statusValue),
+            formRow("Connections", field: connectionsValue)
+        ]))
+
+        let values: [(String, Double)] = [
+            ("Round-trip latency", configuration.roundTripTimeMilliseconds),
+            ("Jitter (± ms)", configuration.jitterMilliseconds),
+            ("Download (Kbps)", configuration.downloadKilobitsPerSecond),
+            ("Upload (Kbps)", configuration.uploadKilobitsPerSecond),
+            ("Seed", Double(configuration.seed))
+        ]
+        let rows = values.enumerated().map { index, value in
+            let field = inspectorNumberField(
+                CGFloat(value.1),
+                action: #selector(networkShapingValueChanged(_:))
+            )
+            field.cell?.sendsActionOnEndEditing = true
+            field.tag = index
+            return formRow(value.0, field: field)
+        }
+        inspectorStack.addArrangedSubview(sectionLabel("CONDITIONS"))
+        inspectorStack.addArrangedSubview(inspectorCard(rows + [
+            cardDivider(),
+            helpText("RTT is split across both directions. Jitter is deterministic for a seed. Set a bandwidth value to 0 for unlimited throughput.")
+        ]))
+
+        let reload = makeWideButton(
+            "Reload from origin with these conditions",
+            action: #selector(reloadPreviewFromOrigin)
+        )
+        reload.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        reload.imagePosition = .imageLeading
+        reload.isEnabled = canvas.preview.currentURL != nil
+        networkReloadButton = reload
+        inspectorStack.addArrangedSubview(reload)
+
+        let activitySummary = helpText("No page resources observed yet.")
+        let activityProgress = NSProgressIndicator()
+        activityProgress.style = .bar
+        activityProgress.minValue = 0
+        activityProgress.maxValue = 1
+        activityProgress.translatesAutoresizingMaskIntoConstraints = false
+        activityProgress.heightAnchor.constraint(equalToConstant: 7).isActive = true
+        activityProgress.setAccessibilityLabel("Known resource loading progress")
+        let resourceStack = NSStackView()
+        resourceStack.orientation = .vertical
+        resourceStack.alignment = .leading
+        resourceStack.spacing = 8
+        resourceStack.translatesAutoresizingMaskIntoConstraints = false
+        networkActivitySummary = activitySummary
+        networkActivityProgress = activityProgress
+        networkResourceStack = resourceStack
+        inspectorStack.addArrangedSubview(sectionLabel("RESOURCE ACTIVITY"))
+        inspectorStack.addArrangedSubview(inspectorCard([
+            activitySummary,
+            activityProgress,
+            cardDivider(),
+            resourceStack
+        ], spacing: 8))
+        inspectorStack.addArrangedSubview(helpText(
+            "Pending bars are indeterminate because WebKit exposes resource size only after completion. A SOCKSv5 proxy shapes remote TCP traffic without decrypting HTTPS. Local HTTP uses an internal loopback bridge. Cached resources and HTTP/3/QUIC are not shaped."
+        ))
+        renderNetworkActivity(networkActivitySnapshot)
     }
 
     private func buildLayersInspector() {
@@ -882,6 +1006,207 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         refreshLocalhostPorts()
     }
 
+    private func updateNetworkMonitoring() {
+        guard inspectorTabs.selectedSegment == 5 else {
+            networkActivityTimer?.invalidate()
+            networkActivityTimer = nil
+            return
+        }
+        if networkActivityTimer == nil {
+            let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                self?.refreshNetworkActivity()
+            }
+            timer.tolerance = 0.1
+            networkActivityTimer = timer
+        }
+        refreshNetworkActivity()
+    }
+
+    private func refreshNetworkActivity() {
+        guard inspectorTabs.selectedSegment == 5 else { return }
+        renderNetworkTransportState()
+        guard !networkActivityRefreshInFlight else { return }
+        networkActivityRefreshInFlight = true
+        // A full snapshot and hundreds of AppKit rows are expensive. Poll a
+        // tiny page-lifecycle signature and rebuild only after it changes.
+        canvas.preview.captureNetworkActivitySignature { [weak self] result in
+            guard let self else { return }
+            guard self.inspectorTabs.selectedSegment == 5 else {
+                self.networkActivityRefreshInFlight = false
+                return
+            }
+            switch result {
+            case .failure(let error):
+                self.networkActivityRefreshInFlight = false
+                self.networkActivitySummary?.stringValue = "Could not read resource activity: \(error.localizedDescription)"
+                self.networkActivitySummary?.textColor = DeckTheme.danger
+            case .success(let signature):
+                guard signature != self.networkActivitySignature else {
+                    self.networkActivityRefreshInFlight = false
+                    self.renderNetworkActivitySummary(self.networkActivitySnapshot)
+                    return
+                }
+                self.captureNetworkActivity(for: signature)
+            }
+        }
+    }
+
+    private func captureNetworkActivity(for signature: String) {
+        canvas.preview.captureNetworkActivity { [weak self] result in
+            guard let self else { return }
+            self.networkActivityRefreshInFlight = false
+            guard self.inspectorTabs.selectedSegment == 5 else { return }
+            switch result {
+            case .failure(let error):
+                self.networkActivitySummary?.stringValue = "Could not read resource activity: \(error.localizedDescription)"
+                self.networkActivitySummary?.textColor = DeckTheme.danger
+            case .success(let snapshot):
+                self.networkActivitySignature = signature
+                guard snapshot != self.networkActivitySnapshot else {
+                    self.renderNetworkActivitySummary(snapshot)
+                    return
+                }
+                self.networkActivitySnapshot = snapshot
+                self.renderNetworkActivity(snapshot)
+            }
+        }
+    }
+
+    private func renderNetworkTransportState() {
+        let report = canvas.preview.networkShapingReport()
+        let activeConnections = report["activeConnectionCount"] as? Int ?? 0
+        let acceptedConnections = report["acceptedConnectionCount"] as? Int ?? 0
+        let status = canvas.preview.networkShapingStatus
+        let connections = "\(activeConnections) active · \(acceptedConnections) total"
+        if networkStatusValue?.stringValue != status {
+            networkStatusValue?.stringValue = status
+        }
+        if networkConnectionsValue?.stringValue != connections {
+            networkConnectionsValue?.stringValue = connections
+        }
+        networkReloadButton?.isEnabled = canvas.preview.currentURL != nil
+        let statusColor = report["trafficObserved"] as? Bool == true
+            ? DeckTheme.accentBright
+            : DeckTheme.secondaryText
+        if networkStatusValue?.textColor != statusColor {
+            networkStatusValue?.textColor = statusColor
+        }
+    }
+
+    private func renderNetworkActivity(_ snapshot: NetworkActivitySnapshot) {
+        renderNetworkTransportState()
+        renderNetworkActivitySummary(snapshot)
+
+        guard let stack = networkResourceStack else { return }
+        stack.arrangedSubviews.forEach {
+            stack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        guard !snapshot.resources.isEmpty else {
+            let empty = helpText("Reload the page to capture its document, scripts, styles, images, fonts, fetch/XHR, and media requests.")
+            stack.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            return
+        }
+        for resource in snapshot.resources {
+            let view = networkResourceView(resource)
+            stack.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
+
+    private func renderNetworkActivitySummary(_ snapshot: NetworkActivitySnapshot) {
+        let total = snapshot.resources.count
+        networkActivitySummary?.stringValue = total == 0
+            ? "No page resources observed yet."
+            : "\(snapshot.completedCount) complete · \(snapshot.pendingCount) pending · \(snapshot.failedCount) failed"
+        networkActivitySummary?.textColor = snapshot.failedCount > 0 ? DeckTheme.danger : DeckTheme.muted
+
+        if let progress = networkActivityProgress {
+            let needsIndeterminateProgress = snapshot.loading && total == 0
+            progress.isIndeterminate = needsIndeterminateProgress
+            progress.doubleValue = snapshot.progress
+            if needsIndeterminateProgress { progress.startAnimation(nil) }
+            else { progress.stopAnimation(nil) }
+            progress.setAccessibilityValue("\(Int(snapshot.progress * 100)) percent")
+        }
+    }
+
+    private func networkResourceView(_ resource: NetworkResourceActivity) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let heading = NSStackView()
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.distribution = .fill
+        heading.translatesAutoresizingMaskIntoConstraints = false
+        let name = NSTextField(labelWithString: networkResourceName(resource.url))
+        name.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        name.textColor = DeckTheme.text
+        name.lineBreakMode = .byTruncatingMiddle
+        name.toolTip = resource.url
+        let status = NSTextField(labelWithString: resource.status.rawValue.uppercased())
+        status.font = .monospacedSystemFont(ofSize: 8.5, weight: .bold)
+        status.textColor = networkResourceColor(resource.status)
+        status.setContentHuggingPriority(.required, for: .horizontal)
+        heading.addArrangedSubview(name)
+        heading.addArrangedSubview(status)
+        stack.addArrangedSubview(heading)
+        heading.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        let details = [
+            resource.initiatorType,
+            resource.responseStatus.map { "HTTP \($0)" },
+            resource.transferSizeBytes.map(Self.networkByteCount),
+            resource.durationMilliseconds.map { "\(Int($0.rounded())) ms" },
+            resource.fromCache ? "cache" : nil,
+            resource.error
+        ].compactMap { $0 }.joined(separator: " · ")
+        let detail = helpText(details)
+        detail.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
+        detail.lineBreakMode = .byTruncatingTail
+        detail.toolTip = details
+        stack.addArrangedSubview(detail)
+        detail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        let progress = NSProgressIndicator()
+        progress.style = .bar
+        progress.minValue = 0
+        progress.maxValue = 1
+        progress.isIndeterminate = resource.status == .pending
+        progress.doubleValue = resource.status == .pending ? 0 : 1
+        progress.translatesAutoresizingMaskIntoConstraints = false
+        progress.heightAnchor.constraint(equalToConstant: 4).isActive = true
+        progress.setAccessibilityLabel("\(networkResourceName(resource.url)) load status")
+        progress.setAccessibilityValue(resource.status.rawValue)
+        if resource.status == .pending { progress.startAnimation(nil) }
+        stack.addArrangedSubview(progress)
+        progress.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        return stack
+    }
+
+    private func networkResourceName(_ rawURL: String) -> String {
+        guard let url = URL(string: rawURL) else { return rawURL }
+        let name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        return name.isEmpty ? (url.host ?? rawURL) : name
+    }
+
+    private func networkResourceColor(_ status: NetworkResourceStatus) -> NSColor {
+        switch status {
+        case .pending: DeckTheme.accentBright
+        case .complete: DeckTheme.secondaryText
+        case .failed: DeckTheme.danger
+        }
+    }
+
+    private static func networkByteCount(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
     @objc private func refreshLocalhostPorts() {
         guard !localhostScanInProgress else { return }
         localhostScanInProgress = true
@@ -1037,13 +1362,17 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func reloadPreview() { canvas.preview.reload() }
+    @objc private func reloadPreviewFromOrigin() {
+        window?.makeFirstResponder(nil)
+        canvas.preview.reloadFromOrigin()
+    }
     @objc private func goBack() { canvas.preview.goBack() }
     @objc private func goForward() { canvas.preview.goForward() }
 
     private func captureScreenshot() {
         guard !toolbarModel.isCapturingScreenshot else { return }
         toolbarModel.isCapturingScreenshot = true
-        canvas.preview.captureScreenshot { [weak self] result in
+        canvas.preview.captureVideoFrame(scale: canvas.preview.profile.viewport.dpr) { [weak self] result in
             guard let self else { return }
             self.toolbarModel.isCapturingScreenshot = false
             switch result {
@@ -1347,6 +1676,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         preferences.isLandscape = canvas.preview.landscape
         canvas.preview.showSafeArea = configuration.safeArea.guideVisible
         canvas.preview.applySafeAreaToPage = configuration.safeArea.forcedIntoPageLayout
+        applyNetworkShapingConfiguration(
+            configuration.network ?? .disabled,
+            reloadIfNeeded: false
+        )
 
         let header = configuration.header
         sampleHeaderEnabled = header.identifier == "builtin-sample-header"
@@ -1534,7 +1867,9 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                     suffix: "replay-\(checkpoint.id.prefix(8))",
                     extension: "png"
                 )
-                self.canvas.preview.captureScreenshot { result in
+                self.canvas.preview.captureVideoFrame(
+                    scale: self.canvas.preview.profile.viewport.dpr
+                ) { result in
                     do {
                         let image = try result.get()
                         try PreviewImageEncoding.pngData(image).write(to: screenshotURL, options: .atomic)
@@ -1663,6 +1998,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         preferences.inspectorTabIndex = inspectorTabs.selectedSegment
         rebuildInspector()
         updateLocalhostMonitoring()
+        updateNetworkMonitoring()
     }
 
     @objc private func safeAreaChanged(_ sender: NSTextField) {
@@ -1680,6 +2016,66 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func showSafeAreaChanged(_ sender: NSButton) { canvas.preview.showSafeArea = sender.state == .on }
     @objc private func applySafeAreaChanged(_ sender: NSButton) { canvas.preview.applySafeAreaToPage = sender.state == .on }
+
+    @objc private func networkShapingEnabledChanged(_ sender: NSButton) {
+        var configuration = canvas.preview.networkShapingConfiguration
+        configuration.enabled = sender.state == .on
+        if !configuration.enabled { configuration.offline = false }
+        applyNetworkShapingConfiguration(configuration)
+    }
+
+    @objc private func networkShapingOfflineChanged(_ sender: NSButton) {
+        var configuration = canvas.preview.networkShapingConfiguration
+        configuration.offline = sender.state == .on
+        if configuration.offline { configuration.enabled = true }
+        applyNetworkShapingConfiguration(configuration)
+    }
+
+    @objc private func networkShapingValueChanged(_ sender: NSTextField) {
+        var configuration = canvas.preview.networkShapingConfiguration
+        let value = max(0, sender.doubleValue)
+        let displayedValue: Double
+        switch sender.tag {
+        case 0:
+            configuration.roundTripTimeMilliseconds = value
+            displayedValue = value
+        case 1:
+            configuration.jitterMilliseconds = value
+            displayedValue = value
+        case 2:
+            configuration.downloadKilobitsPerSecond = value
+            displayedValue = value
+        case 3:
+            configuration.uploadKilobitsPerSecond = value
+            displayedValue = value
+        case 4:
+            configuration.seed = UInt64(min(
+                value.rounded(),
+                Double(NetworkShapingConfiguration.maximumJSONSafeSeed)
+            ))
+            displayedValue = Double(configuration.seed)
+        default: return
+        }
+        sender.stringValue = CGFloat(displayedValue).formatted()
+        applyNetworkShapingConfiguration(configuration, reloadIfNeeded: false)
+    }
+
+    private func applyNetworkShapingConfiguration(
+        _ configuration: NetworkShapingConfiguration,
+        reloadIfNeeded: Bool = true
+    ) {
+        switch canvas.preview.applyNetworkShapingConfiguration(
+            configuration,
+            reloadIfNeeded: reloadIfNeeded
+        ) {
+        case .success:
+            preferences.networkShapingConfiguration = configuration
+        case .failure(let error):
+            presentError(title: "Couldn’t apply network shaping", error: error)
+        }
+        if reloadIfNeeded { rebuildInspector() }
+        else { renderNetworkActivity(networkActivitySnapshot) }
+    }
 
     @objc private func chooseHeader() {
         guard let result = chooseHTMLFile() else { return }
@@ -2320,7 +2716,21 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         refreshDeviceLists(); selectDevice(at: selectedIndex)
     }
 
-    func previewDidStartLoading() {}
+    func previewDidStartLoading() {
+        networkActivitySignature = nil
+        networkActivitySnapshot = NetworkActivitySnapshot(
+            loading: true,
+            progress: 0,
+            pendingCount: 0,
+            completedCount: 0,
+            failedCount: 0,
+            resources: []
+        )
+        if inspectorTabs.selectedSegment == 5 {
+            renderNetworkActivity(networkActivitySnapshot)
+            refreshNetworkActivity()
+        }
+    }
 
     func previewDidFinishLoading(title: String?, url: URL?) {
         guard let url else { return }
@@ -2328,6 +2738,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         addressField.stringValue = address
         toolbarModel.address = address
         UserDefaults.standard.set(address, forKey: "viewdeck.native.last-url")
+        if inspectorTabs.selectedSegment == 5 { refreshNetworkActivity() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
             if let recording = self.pendingQARecording,
@@ -2720,11 +3131,15 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func infoRow(_ labelValue: String, value: String) -> NSView {
+        formRow(labelValue, field: inspectorInfoField(value))
+    }
+
+    private func inspectorInfoField(_ value: String) -> NSTextField {
         let field = NSTextField(labelWithString: value)
         field.alignment = .right
         field.font = .monospacedSystemFont(ofSize: 10.5, weight: .medium)
         field.textColor = DeckTheme.secondaryText
-        return formRow(labelValue, field: field)
+        return field
     }
 
     private func helpText(_ value: String) -> NSTextField {

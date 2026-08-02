@@ -178,6 +178,7 @@ struct QADeviceConfiguration: Codable, Equatable {
     var resolution: QAResolutionConfiguration
     var safeArea: QASafeAreaConfiguration
     var safari: QASafariConfiguration
+    var network: NetworkShapingConfiguration? = nil
     var header: QALayerConfiguration
     var footer: QALayerConfiguration
     var left: QALayerConfiguration? = nil
@@ -1174,6 +1175,7 @@ extension QADeviceConfiguration {
         landscape: Bool,
         showSafeArea: Bool,
         applySafeAreaToPage: Bool,
+        networkShapingConfiguration: NetworkShapingConfiguration = .disabled,
         header: QALayerConfiguration,
         footer: QALayerConfiguration,
         left: QALayerConfiguration? = nil,
@@ -1263,6 +1265,7 @@ extension QADeviceConfiguration {
                 topChromeCSSPixels: topChrome,
                 bottomChromeCSSPixels: bottomChrome
             ),
+            network: networkShapingConfiguration.normalized,
             header: header,
             footer: footer,
             left: left,
@@ -1343,6 +1346,7 @@ extension QADeviceConfiguration {
                 topChromeCSSPixels: topChrome,
                 bottomChromeCSSPixels: bottomChrome
             ),
+            network: preview.networkShapingConfiguration,
             header: header,
             footer: footer,
             left: left,
