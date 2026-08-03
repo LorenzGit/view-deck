@@ -204,7 +204,7 @@ The proxy provides deterministic application-level conditions rather than radio 
 
 ## Device profiles and safe areas
 
-The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. In the **Device** panel, choose **Add to custom devices** to save the current geometry together with its portrait/landscape orientation and header, footer, left, and right layer selections. Saved setups appear in the sidebar's **Custom** tab, where they can be applied, edited, or removed. Existing custom skins are migrated automatically as portrait setups with no selected layers.
+The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. Built-in and custom devices share one sidebar list so names use the full row width. Right-click any built-in to customize it, or right-click a custom device to edit or remove it. The **Device** panel exposes the name, platform, portrait/landscape orientation, viewport, shell skin, sensor, system UI, safe-area insets and behavior, browser simulation, and all HTML layers. Choose **Add to custom devices** for a built-in or **Save device changes** for a custom device to persist its complete geometry, orientation, and header, footer, left, and right layer selections. Existing custom skins migrate automatically as portrait setups with no selected layers.
 
 ViewDeck exposes the selected safe-area values to the page:
 
@@ -219,7 +219,7 @@ The preview document also receives `data-viewdeck-device`, `data-viewdeck-engine
 
 ## HTML layers
 
-The **Layers** inspector can reserve space around the main page and render a standalone HTML document in each region. Header and footer layers work in either orientation. Left and right rail layers reserve width and appear only in landscape, so selecting them does not change the portrait page viewport.
+The **Page layers** sections in the **Device** panel can reserve space around the main page and render a standalone HTML document in each region. Header and footer layers work in either orientation. Left and right rail layers reserve width and appear only in landscape, so selecting them does not change the portrait page viewport.
 
 Choose **h5_left** and **h5_right** in the layer library for a ready-made pair modeled on a landscape reading interface. All bundled layers use the `h5_` prefix: [`h5_header.html`](examples/h5_header.html), [`h5_footer.html`](examples/h5_footer.html), [`h5_left.html`](examples/h5_left.html), and [`h5_right.html`](examples/h5_right.html).
 

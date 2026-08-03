@@ -474,8 +474,8 @@ enum CustomDeviceSetupStore {
     private static let key = "viewdeck.native.custom-devices"
     private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
 
-    static func load() -> [CustomDeviceSetup] {
-        guard let data = defaults.data(forKey: key) else { return [] }
+    static func load(store: UserDefaults = defaults) -> [CustomDeviceSetup] {
+        guard let data = store.data(forKey: key) else { return [] }
         if let setups = try? JSONDecoder().decode([CustomDeviceSetup].self, from: data) {
             return setups
         }
@@ -483,13 +483,13 @@ enum CustomDeviceSetupStore {
             return []
         }
         let migrated = profiles.map(CustomDeviceSetup.init(migrating:))
-        save(migrated)
+        save(migrated, store: store)
         return migrated
     }
 
-    static func save(_ setups: [CustomDeviceSetup]) {
+    static func save(_ setups: [CustomDeviceSetup], store: UserDefaults = defaults) {
         guard let data = try? JSONEncoder().encode(setups) else { return }
-        defaults.set(data, forKey: key)
+        store.set(data, forKey: key)
     }
 
     static func decode(_ data: Data) -> [CustomDeviceSetup] {

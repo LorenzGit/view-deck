@@ -21,6 +21,11 @@ private enum QAAppError: LocalizedError {
 final class MainWindowController: NSWindowController, DevicePreviewDelegate, DevServerControllerDelegate, NSSplitViewDelegate {
     private var customSetups: [CustomDeviceSetup]
     private var devices: [DeviceProfile] { BuiltinDevices.all + customSetups.map(\.profile) }
+    private var recentlySavedCustomSetupID: String?
+    private var selectedCustomIndex: Int? {
+        let index = selectedIndex - BuiltinDevices.all.count
+        return customSetups.indices.contains(index) ? index : nil
+    }
     private var selectedIndex = 0
     private let preferences: ViewDeckPreferences
 
@@ -28,17 +33,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private let sidebar = FlippedView()
     private let center = FlippedView()
     private let inspector = FlippedView()
-    private let sidebarTabs = DeckSegmentedControl(
-        labels: ["Device Library", "Custom"],
-        trackingMode: .selectOne,
-        target: nil,
-        action: nil
-    )
+    private let sidebarHeading = NSTextField(labelWithString: "DEVICE LIBRARY")
     private let deviceListStack = NSStackView()
     private let widthField = NSTextField()
     private let heightField = NSTextField()
     private let addressField = NSTextField()
-    private let inspectorTabs = DeckSegmentedControl(labels: ["Device", "Safe area", "Layers", "Server", "Ports", "Network"], trackingMode: .selectOne, target: nil, action: nil)
+    private let inspectorTabs = DeckSegmentedControl(labels: ["Device", "Server", "Ports", "Network"], trackingMode: .selectOne, target: nil, action: nil)
     private let inspectorScroll = NSScrollView()
     private let inspectorStack = DeckFillStackView()
     private let projectButton = DeckButton(frame: .zero)
@@ -136,6 +136,25 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             case .customCommand: return "Custom command"
             }
         }
+    }
+
+    private enum InspectorTab: Int {
+        case device
+        case server
+        case ports
+        case network
+    }
+
+    private var selectedInspectorTab: InspectorTab {
+        InspectorTab(rawValue: inspectorTabs.selectedSegment) ?? .device
+    }
+
+    private enum ShellMetric: Int {
+        case top, right, bottom, left, radius
+    }
+
+    private enum SensorMetric: Int {
+        case width, height, top
     }
 
     let canvas: PreviewCanvasView
@@ -278,14 +297,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func buildSidebar() {
-        sidebarTabs.selectedSegment = selectedIndex >= BuiltinDevices.all.count ? 1 : 0
-        sidebarTabs.selectionChanged = { [weak self] in self?.refreshDeviceLists() }
-        sidebarTabs.target = self
-        sidebarTabs.action = #selector(sidebarTabChanged)
-        sidebarTabs.setToolTip("Browse built-in device profiles", forSegment: 0)
-        sidebarTabs.setToolTip("Browse, edit, and remove saved custom setups", forSegment: 1)
-        sidebarTabs.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.addSubview(sidebarTabs)
+        sidebarHeading.font = .monospacedSystemFont(ofSize: 9.5, weight: .bold)
+        sidebarHeading.textColor = DeckTheme.muted
+        sidebarHeading.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(sidebarHeading)
 
         deviceListStack.orientation = .vertical
         deviceListStack.alignment = .leading
@@ -319,11 +334,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         sidebar.addSubview(projectButton)
 
         NSLayoutConstraint.activate([
-            sidebarTabs.topAnchor.constraint(equalTo: sidebar.topAnchor),
-            sidebarTabs.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
-            sidebarTabs.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            sidebarTabs.heightAnchor.constraint(equalToConstant: 50),
-            scroll.topAnchor.constraint(equalTo: sidebarTabs.bottomAnchor, constant: 4),
+            sidebarHeading.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 20),
+            sidebarHeading.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14),
+            sidebarHeading.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14),
+            scroll.topAnchor.constraint(equalTo: sidebarHeading.bottomAnchor, constant: 13),
             scroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 7),
             scroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -7),
             scroll.bottomAnchor.constraint(equalTo: quickActions.topAnchor, constant: -12),
@@ -405,12 +419,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
         inspectorTabs.target = self
         inspectorTabs.action = #selector(inspectorTabChanged)
-        inspectorTabs.setToolTip("Edit viewport, DPR, and browser simulation", forSegment: 0)
-        inspectorTabs.setToolTip("Edit safe-area insets and page behavior", forSegment: 1)
-        inspectorTabs.setToolTip("Add optional HTML layers around the page", forSegment: 2)
-        inspectorTabs.setToolTip("Preview static HTML or run a local command", forSegment: 3)
-        inspectorTabs.setToolTip("Inspect processes listening on localhost ports", forSegment: 4)
-        inspectorTabs.setToolTip("Simulate deterministic latency and bandwidth", forSegment: 5)
+        inspectorTabs.setToolTip("Edit device geometry, orientation, safe areas, and HTML layers", forSegment: 0)
+        inspectorTabs.setToolTip("Preview static HTML or run a local command", forSegment: 1)
+        inspectorTabs.setToolTip("Inspect processes listening on localhost ports", forSegment: 2)
+        inspectorTabs.setToolTip("Simulate deterministic latency and bandwidth", forSegment: 3)
         inspectorTabs.translatesAutoresizingMaskIntoConstraints = false
         inspector.addSubview(inspectorTabs)
 
@@ -459,19 +471,43 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         networkResourceStack = nil
         networkReloadButton = nil
         inspectorStack.arrangedSubviews.forEach { inspectorStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        switch inspectorTabs.selectedSegment {
-        case 1: buildSafeAreaInspector()
-        case 2: buildLayersInspector()
-        case 3: buildServerInspector()
-        case 4: buildPortsInspector()
-        case 5: buildNetworkInspector()
-        default: buildDeviceInspector()
+        switch selectedInspectorTab {
+        case .device: buildDeviceInspector()
+        case .server: buildServerInspector()
+        case .ports: buildPortsInspector()
+        case .network: buildNetworkInspector()
         }
     }
 
     private func buildDeviceInspector() {
         let profile = canvas.preview.profile
         inspectorStack.addArrangedSubview(inspectorHeading(profile.name, subtitle: "Native macOS WKWebView · \(profile.viewport.dpr.formatted())× DPR"))
+
+        inspectorStack.addArrangedSubview(sectionLabel("IDENTITY & ORIENTATION"))
+        let name = inspectorTextField(profile.name, action: #selector(inspectorNameChanged(_:)))
+        let platform = inspectorPopup(
+            values: DevicePlatform.allCases.map(\.rawValue),
+            selected: profile.platform.rawValue,
+            action: #selector(inspectorPlatformChanged(_:))
+        )
+        let orientation = DeckSegmentedControl(
+            labels: ["Portrait", "Landscape"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(inspectorOrientationChanged(_:))
+        )
+        orientation.selectedSegment = canvas.preview.landscape ? 1 : 0
+        orientation.setToolTip("Use portrait orientation", forSegment: 0)
+        orientation.setToolTip("Use landscape orientation", forSegment: 1)
+        orientation.translatesAutoresizingMaskIntoConstraints = false
+        orientation.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        orientation.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        inspectorStack.addArrangedSubview(inspectorCard([
+            formRow("Name", field: name),
+            formRow("Platform", field: platform),
+            formRow("Orientation", field: orientation)
+        ]))
+
         inspectorStack.addArrangedSubview(sectionLabel("VIEWPORT"))
         inspectorStack.addArrangedSubview(inspectorCard([
             formRow("Width", field: inspectorNumberField(canvas.preview.logicalViewportSize.width, action: #selector(inspectorWidthChanged))),
@@ -483,6 +519,55 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             infoRow("Rendering engine", value: "Apple WebKit")
         ]))
 
+        inspectorStack.addArrangedSubview(sectionLabel("DEVICE SKIN"))
+        let shellValues: [(String, ShellMetric, CGFloat)] = [
+            ("Shell top", .top, profile.shell.top),
+            ("Shell right", .right, profile.shell.right),
+            ("Shell bottom", .bottom, profile.shell.bottom),
+            ("Shell left", .left, profile.shell.left),
+            ("Corner radius", .radius, profile.shell.radius)
+        ]
+        let shellRows = shellValues.map { label, metric, value in
+            let field = inspectorNumberField(value, action: #selector(inspectorShellChanged(_:)))
+            field.tag = metric.rawValue
+            return formRow(label, field: field)
+        }
+        inspectorStack.addArrangedSubview(inspectorCard(shellRows))
+
+        inspectorStack.addArrangedSubview(sectionLabel("SENSOR & SYSTEM UI"))
+        var sensorRows: [NSView] = [
+            formRow(
+                "Sensor type",
+                field: inspectorPopup(
+                    values: SensorType.allCases.map(\.rawValue),
+                    selected: profile.sensor.type.rawValue,
+                    action: #selector(inspectorSensorTypeChanged(_:))
+                )
+            )
+        ]
+        let sensorValues: [(String, SensorMetric, CGFloat)] = [
+            ("Sensor width", .width, profile.sensor.width),
+            ("Sensor height", .height, profile.sensor.height),
+            ("Sensor top", .top, profile.sensor.top)
+        ]
+        sensorRows += sensorValues.map { label, metric, value in
+            let field = inspectorNumberField(value, action: #selector(inspectorSensorChanged(_:)))
+            field.tag = metric.rawValue
+            return formRow(label, field: field)
+        }
+        let homeIndicator = DeckCheckboxButton(
+            title: "Home indicator",
+            target: self,
+            action: #selector(inspectorHomeIndicatorChanged(_:))
+        )
+        homeIndicator.state = profile.homeIndicator ? .on : .off
+        homeIndicator.toolTip = "Show the simulated home indicator when Safari chrome is hidden"
+        sensorRows += [cardDivider(), homeIndicator]
+        inspectorStack.addArrangedSubview(inspectorCard(sensorRows))
+
+        appendSafeAreaControls()
+        appendLayerControls()
+
         inspectorStack.addArrangedSubview(sectionLabel("BROWSER SIMULATION"))
         let safari = DeckCheckboxButton(title: "iOS Safari interface", target: self, action: #selector(toggleSafari(_:)))
         safari.state = profile.safariChrome ? .on : .off
@@ -491,18 +576,36 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             safari,
             helpText("Reserves the measured Safari address and navigation bars around the website viewport.")
         ]))
-        let add = makeWideButton(
-            "Add to custom devices",
-            action: #selector(addCurrentDeviceToCustom)
-        )
-        add.toolTip = "Save this device, its orientation, and active layers in the Custom tab"
-        add.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: nil)
-        add.imagePosition = .imageLeading
-        inspectorStack.addArrangedSubview(add)
+
+        if let customIndex = selectedCustomIndex {
+            let setupID = customSetups[customIndex].id
+            let didJustSave = recentlySavedCustomSetupID == setupID
+            let save = makeWideButton(
+                didJustSave ? "Device changes saved" : "Save device changes",
+                action: #selector(saveSelectedCustomSetup)
+            )
+            save.toolTip = didJustSave
+                ? "The complete custom setup was saved"
+                : "Save the current profile, orientation, and active layers"
+            save.image = NSImage(
+                systemSymbolName: didJustSave ? "checkmark.circle.fill" : "square.and.arrow.down",
+                accessibilityDescription: nil
+            )
+            save.imagePosition = .imageLeading
+            inspectorStack.addArrangedSubview(save)
+        } else {
+            let add = makeWideButton(
+                "Add to custom devices",
+                action: #selector(addCurrentDeviceToCustom)
+            )
+            add.toolTip = "Save this edited device, its orientation, and active layers"
+            add.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: nil)
+            add.imagePosition = .imageLeading
+            inspectorStack.addArrangedSubview(add)
+        }
     }
 
-    private func buildSafeAreaInspector() {
-        inspectorStack.addArrangedSubview(inspectorHeading("Safe area", subtitle: "Guide and optional document insets"))
+    private func appendSafeAreaControls() {
         let safe = canvas.preview.safeArea
         var geometryRows: [NSView] = []
         [("Top", safe.top), ("Right", safe.right), ("Bottom", safe.bottom), ("Left", safe.left)]
@@ -512,10 +615,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 field.tag = index
                 geometryRows.append(formRow(item.0, field: field))
             }
-        inspectorStack.addArrangedSubview(sectionLabel("INSETS"))
+        inspectorStack.addArrangedSubview(sectionLabel("SAFE AREA INSETS"))
         inspectorStack.addArrangedSubview(inspectorCard(geometryRows))
 
-        inspectorStack.addArrangedSubview(sectionLabel("BEHAVIOR"))
+        inspectorStack.addArrangedSubview(sectionLabel("SAFE AREA BEHAVIOR"))
         let visible = DeckCheckboxButton(title: "Show safe-area guide", target: self, action: #selector(showSafeAreaChanged))
         visible.state = canvas.preview.showSafeArea ? .on : .off
         visible.toolTip = "Show or hide the visual guide; this does not change the website layout"
@@ -628,9 +731,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         renderNetworkActivity(networkActivitySnapshot)
     }
 
-    private func buildLayersInspector() {
-        inspectorStack.addArrangedSubview(inspectorHeading("Page layers", subtitle: "Optional reusable HTML outside the website"))
-        inspectorStack.addArrangedSubview(sectionLabel("HEADER"))
+    private func appendLayerControls() {
+        inspectorStack.addArrangedSubview(sectionLabel("PAGE LAYERS · HEADER"))
         configureLayerPopup(headerLayerPopup, kind: .header, action: #selector(headerLayerSelected(_:)))
         let importHeader = makeWideButton("Import header HTML…", action: #selector(chooseHeader))
         importHeader.toolTip = "Import an existing HTML file into the header library"
@@ -649,7 +751,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             editHeader,
             formRow("Reserved height", field: inspectorNumberField(canvas.preview.headerHeight, action: #selector(headerHeightChanged)))
         ]))
-        inspectorStack.addArrangedSubview(sectionLabel("FOOTER"))
+        inspectorStack.addArrangedSubview(sectionLabel("PAGE LAYERS · FOOTER"))
         configureLayerPopup(footerLayerPopup, kind: .footer, action: #selector(footerLayerSelected(_:)))
         let importFooter = makeWideButton("Import footer HTML…", action: #selector(chooseFooter))
         importFooter.toolTip = "Import an existing HTML file into the footer library"
@@ -668,7 +770,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             editFooter,
             formRow("Reserved height", field: inspectorNumberField(canvas.preview.footerHeight, action: #selector(footerHeightChanged)))
         ]))
-        inspectorStack.addArrangedSubview(sectionLabel("LANDSCAPE LEFT"))
+        inspectorStack.addArrangedSubview(sectionLabel("PAGE LAYERS · LANDSCAPE LEFT"))
         configureLayerPopup(leftLayerPopup, kind: .left, action: #selector(leftLayerSelected(_:)))
         let importLeft = makeWideButton("Import left rail HTML…", action: #selector(chooseLeft))
         importLeft.toolTip = "Import an existing HTML file into the left rail library"
@@ -687,7 +789,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             editLeft,
             formRow("Reserved width", field: inspectorNumberField(canvas.preview.leftWidth, action: #selector(leftWidthChanged)))
         ]))
-        inspectorStack.addArrangedSubview(sectionLabel("LANDSCAPE RIGHT"))
+        inspectorStack.addArrangedSubview(sectionLabel("PAGE LAYERS · LANDSCAPE RIGHT"))
         configureLayerPopup(rightLayerPopup, kind: .right, action: #selector(rightLayerSelected(_:)))
         let importRight = makeWideButton("Import right rail HTML…", action: #selector(chooseRight))
         importRight.toolTip = "Import an existing HTML file into the right rail library"
@@ -995,7 +1097,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func updateLocalhostMonitoring() {
-        guard inspectorTabs.selectedSegment == 4 else {
+        guard selectedInspectorTab == .ports else {
             localhostRefreshTimer?.invalidate()
             localhostRefreshTimer = nil
             return
@@ -1011,7 +1113,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func updateNetworkMonitoring() {
-        guard inspectorTabs.selectedSegment == 5 else {
+        guard selectedInspectorTab == .network else {
             networkActivityTimer?.invalidate()
             networkActivityTimer = nil
             return
@@ -1027,7 +1129,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func refreshNetworkActivity() {
-        guard inspectorTabs.selectedSegment == 5 else { return }
+        guard selectedInspectorTab == .network else { return }
         renderNetworkTransportState()
         guard !networkActivityRefreshInFlight else { return }
         networkActivityRefreshInFlight = true
@@ -1035,7 +1137,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         // tiny page-lifecycle signature and rebuild only after it changes.
         canvas.preview.captureNetworkActivitySignature { [weak self] result in
             guard let self else { return }
-            guard self.inspectorTabs.selectedSegment == 5 else {
+            guard self.selectedInspectorTab == .network else {
                 self.networkActivityRefreshInFlight = false
                 return
             }
@@ -1059,7 +1161,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         canvas.preview.captureNetworkActivity { [weak self] result in
             guard let self else { return }
             self.networkActivityRefreshInFlight = false
-            guard self.inspectorTabs.selectedSegment == 5 else { return }
+            guard self.selectedInspectorTab == .network else { return }
             switch result {
             case .failure(let error):
                 self.networkActivitySummary?.stringValue = "Could not read resource activity: \(error.localizedDescription)"
@@ -1215,7 +1317,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         guard !localhostScanInProgress else { return }
         localhostScanInProgress = true
         localhostScanError = nil
-        if inspectorTabs.selectedSegment == 4 { rebuildInspector() }
+        if selectedInspectorTab == .ports { rebuildInspector() }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result { try LocalhostPortScanner.scan() }
             DispatchQueue.main.async {
@@ -1228,7 +1330,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 case .failure(let error):
                     self.localhostScanError = error.localizedDescription
                 }
-                if self.inspectorTabs.selectedSegment == 4 { self.rebuildInspector() }
+                if self.selectedInspectorTab == .ports { self.rebuildInspector() }
             }
         }
     }
@@ -1265,20 +1367,18 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private func refreshDeviceLists() {
         deviceListStack.arrangedSubviews.forEach { deviceListStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        if sidebarTabs.selectedSegment == 1 {
-            refreshCustomSetupList()
-            return
-        }
-        for (index, device) in BuiltinDevices.all.enumerated() {
-            let symbol: String
-            switch device.platform {
-            case .desktop: symbol = "display"
-            case .tablet: symbol = "ipad"
-            default: symbol = "iphone"
-            }
-            let button = makeSidebarButton(device.name, symbol: symbol, action: #selector(sidebarDeviceSelected))
+        for (index, device) in devices.enumerated() {
+            let button = makeSidebarButton(
+                device.name,
+                symbol: sidebarSymbol(for: device, at: index),
+                action: #selector(sidebarDeviceSelected)
+            )
+            let isCustom = index >= BuiltinDevices.all.count
             button.tag = index
-            button.toolTip = "Preview with \(device.name)"
+            button.toolTip = isCustom
+                ? "Apply \(device.name). Right-click to edit or remove it."
+                : "Preview with \(device.name). Right-click to customize it."
+            button.menu = deviceContextMenu(at: index)
             button.state = index == selectedIndex ? .on : .off
             applySidebarSelection(button, selected: index == selectedIndex)
             deviceListStack.addArrangedSubview(button)
@@ -1287,77 +1387,41 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
     }
 
-    private func refreshCustomSetupList() {
-        guard !customSetups.isEmpty else {
-            let empty = helpText("No custom devices yet. Select any device, then use Add to custom devices in the Device panel.")
-            deviceListStack.addArrangedSubview(empty)
-            empty.widthAnchor.constraint(equalTo: deviceListStack.widthAnchor, constant: -16).isActive = true
-            return
+    private func sidebarSymbol(for device: DeviceProfile, at index: Int) -> String {
+        if index >= BuiltinDevices.all.count {
+            return customSetups[index - BuiltinDevices.all.count].landscape ? "rectangle" : "iphone"
         }
-
-        for (customIndex, setup) in customSetups.enumerated() {
-            let globalIndex = BuiltinDevices.all.count + customIndex
-            let row = NSStackView()
-            row.orientation = .horizontal
-            row.alignment = .centerY
-            row.spacing = 4
-            row.translatesAutoresizingMaskIntoConstraints = false
-
-            let button = makeSidebarButton(
-                setup.profile.name,
-                symbol: setup.landscape ? "rectangle" : "iphone",
-                action: #selector(sidebarDeviceSelected)
-            )
-            button.tag = globalIndex
-            button.toolTip = "Apply \(setup.profile.name), including orientation and layers"
-            button.state = globalIndex == selectedIndex ? .on : .off
-            applySidebarSelection(button, selected: globalIndex == selectedIndex)
-
-            let edit = customSetupIconButton(
-                symbol: "pencil",
-                tooltip: "Edit \(setup.profile.name)",
-                action: #selector(editCustomSetup(_:)),
-                tag: customIndex
-            )
-            let remove = customSetupIconButton(
-                symbol: "trash",
-                tooltip: "Remove \(setup.profile.name)",
-                action: #selector(removeCustomSetup(_:)),
-                tag: customIndex
-            )
-            styleButton(remove, fill: .clear, border: .clear, text: DeckTheme.danger, radius: 7)
-
-            row.addArrangedSubview(button)
-            row.addArrangedSubview(edit)
-            row.addArrangedSubview(remove)
-            button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            edit.setContentHuggingPriority(.required, for: .horizontal)
-            remove.setContentHuggingPriority(.required, for: .horizontal)
-            deviceListStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: deviceListStack.widthAnchor).isActive = true
-            row.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        switch device.platform {
+        case .desktop: return "display"
+        case .tablet: return "ipad"
+        default: return "iphone"
         }
     }
 
-    private func customSetupIconButton(
-        symbol: String,
-        tooltip: String,
-        action: Selector,
-        tag: Int
-    ) -> NSButton {
-        let button = DeckButton(frame: .zero)
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
-        button.imagePosition = .imageOnly
-        button.target = self
-        button.action = action
-        button.tag = tag
-        button.toolTip = tooltip
-        styleButton(button, fill: .clear, border: .clear, text: DeckTheme.muted, radius: 7)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        return button
+    private func deviceContextMenu(at index: Int) -> NSMenu {
+        let menu = NSMenu()
+        let isCustom = index >= BuiltinDevices.all.count
+        let edit = NSMenuItem(
+            title: isCustom ? "Edit Device…" : "Customize Device…",
+            action: #selector(editSidebarDevice(_:)),
+            keyEquivalent: ""
+        )
+        edit.target = self
+        edit.tag = index
+        menu.addItem(edit)
+
+        if isCustom {
+            menu.addItem(.separator())
+            let remove = NSMenuItem(
+                title: "Remove Device",
+                action: #selector(removeSidebarDevice(_:)),
+                keyEquivalent: ""
+            )
+            remove.target = self
+            remove.tag = index
+            menu.addItem(remove)
+        }
+        return menu
     }
 
     private func selectDevice(at index: Int) {
@@ -1445,7 +1509,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func sidebarDeviceSelected(_ sender: NSButton) { selectDevice(at: sender.tag) }
-    @objc private func sidebarTabChanged() { refreshDeviceLists() }
 
     @objc private func viewportChanged() {
         var device = canvas.preview.profile
@@ -1453,6 +1516,30 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         device.viewport.height = max(320, heightField.doubleValue)
         canvas.preview.profile = device
         updateStatus(); rebuildInspector()
+    }
+
+    @objc private func inspectorNameChanged(_ sender: NSTextField) {
+        let name = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            rebuildInspector()
+            return
+        }
+        updatePreviewProfile { $0.name = name }
+    }
+
+    @objc private func inspectorPlatformChanged(_ sender: NSPopUpButton) {
+        guard let value = sender.titleOfSelectedItem,
+              let platform = DevicePlatform(rawValue: value) else { return }
+        updatePreviewProfile { $0.platform = platform }
+    }
+
+    @objc private func inspectorOrientationChanged(_ sender: NSSegmentedControl) {
+        let landscape = sender.selectedSegment == 1
+        guard canvas.preview.landscape != landscape else { return }
+        canvas.preview.landscape = landscape
+        preferences.isLandscape = landscape
+        updateStatus()
+        rebuildInspector()
     }
 
     @objc private func inspectorWidthChanged(_ sender: NSTextField) {
@@ -1475,6 +1562,50 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func inspectorDPRChanged(_ sender: NSTextField) {
         setDPR(sender.doubleValue)
+    }
+
+    @objc private func inspectorShellChanged(_ sender: NSTextField) {
+        guard let metric = ShellMetric(rawValue: sender.tag) else { return }
+        let value = max(0, CGFloat(sender.doubleValue))
+        updatePreviewProfile { profile in
+            switch metric {
+            case .top: profile.shell.top = value
+            case .right: profile.shell.right = value
+            case .bottom: profile.shell.bottom = value
+            case .left: profile.shell.left = value
+            case .radius: profile.shell.radius = value
+            }
+        }
+    }
+
+    @objc private func inspectorSensorTypeChanged(_ sender: NSPopUpButton) {
+        guard let value = sender.titleOfSelectedItem,
+              let sensor = SensorType(rawValue: value) else { return }
+        updatePreviewProfile { $0.sensor.type = sensor }
+    }
+
+    @objc private func inspectorSensorChanged(_ sender: NSTextField) {
+        guard let metric = SensorMetric(rawValue: sender.tag) else { return }
+        let value = max(0, CGFloat(sender.doubleValue))
+        updatePreviewProfile { profile in
+            switch metric {
+            case .width: profile.sensor.width = value
+            case .height: profile.sensor.height = value
+            case .top: profile.sensor.top = value
+            }
+        }
+    }
+
+    @objc private func inspectorHomeIndicatorChanged(_ sender: NSButton) {
+        updatePreviewProfile { $0.homeIndicator = sender.state == .on }
+    }
+
+    private func updatePreviewProfile(_ update: (inout DeviceProfile) -> Void) {
+        var profile = canvas.preview.profile
+        update(&profile)
+        canvas.preview.profile = profile
+        updateStatus()
+        rebuildInspector()
     }
 
     private func setDPR(_ value: Double) {
@@ -2809,34 +2940,88 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func addCurrentDeviceToCustom() {
+        guard commitPendingInspectorEdit() else { return }
         let identifier = UUID().uuidString
         var profile = canvas.preview.profile
         profile.id = identifier
         profile.name += profile.builtin ? " Custom" : " Copy"
         profile.builtin = false
         presentCustomDeviceEditor(
-            setup: CustomDeviceSetup(
-                id: identifier,
-                profile: profile,
-                landscape: canvas.preview.landscape,
-                header: currentLayerSelection(.header),
-                footer: currentLayerSelection(.footer),
-                left: currentLayerSelection(.left),
-                right: currentLayerSelection(.right)
-            ),
+            setup: currentCustomSetup(id: identifier, profile: profile),
             replacing: nil
         )
     }
 
-    @objc private func editCustomSetup(_ sender: NSButton) {
-        guard customSetups.indices.contains(sender.tag) else { return }
-        let setup = customSetups[sender.tag]
-        presentCustomDeviceEditor(setup: setup, replacing: setup.id)
+    @objc private func saveSelectedCustomSetup() {
+        guard commitPendingInspectorEdit() else { return }
+        guard let customIndex = selectedCustomIndex else {
+            addCurrentDeviceToCustom()
+            return
+        }
+        let identifier = customSetups[customIndex].id
+        var profile = canvas.preview.profile
+        profile.id = identifier
+        profile.builtin = false
+        customSetups[customIndex] = currentCustomSetup(id: identifier, profile: profile)
+        CustomDeviceSetupStore.save(customSetups)
+        recentlySavedCustomSetupID = identifier
+        refreshDeviceLists()
+        rebuildInspector()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.recentlySavedCustomSetupID == identifier else { return }
+            self.recentlySavedCustomSetupID = nil
+            if self.selectedInspectorTab == .device { self.rebuildInspector() }
+        }
     }
 
-    @objc private func removeCustomSetup(_ sender: NSButton) {
-        guard customSetups.indices.contains(sender.tag) else { return }
-        let setup = customSetups[sender.tag]
+    private func commitPendingInspectorEdit() -> Bool {
+        guard let window else { return true }
+        guard let fieldEditor = window.firstResponder as? NSTextView,
+              let field = fieldEditor.delegate as? NSTextField,
+              field.isDescendant(of: inspectorStack),
+              let action = field.action else {
+            return window.makeFirstResponder(nil)
+        }
+        field.validateEditing()
+        return NSApp.sendAction(action, to: field.target, from: field)
+    }
+
+    @objc private func editSidebarDevice(_ sender: NSMenuItem) {
+        guard devices.indices.contains(sender.tag) else { return }
+        if sender.tag >= BuiltinDevices.all.count {
+            let customIndex = sender.tag - BuiltinDevices.all.count
+            let storedSetup = customSetups[customIndex]
+            let setup: CustomDeviceSetup
+            if sender.tag == selectedIndex {
+                var profile = canvas.preview.profile
+                profile.id = storedSetup.id
+                profile.builtin = false
+                setup = currentCustomSetup(id: storedSetup.id, profile: profile)
+            } else {
+                setup = storedSetup
+            }
+            presentCustomDeviceEditor(setup: setup, replacing: setup.id)
+            return
+        }
+
+        let identifier = UUID().uuidString
+        var profile = BuiltinDevices.all[sender.tag]
+        profile.id = identifier
+        profile.name += " Custom"
+        profile.builtin = false
+        presentCustomDeviceEditor(
+            setup: currentCustomSetup(id: identifier, profile: profile),
+            replacing: nil
+        )
+    }
+
+    @objc private func removeSidebarDevice(_ sender: NSMenuItem) {
+        removeCustomSetup(at: sender.tag - BuiltinDevices.all.count)
+    }
+
+    private func removeCustomSetup(at customIndex: Int) {
+        guard customSetups.indices.contains(customIndex) else { return }
+        let setup = customSetups[customIndex]
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Remove \(setup.profile.name)?"
@@ -2845,20 +3030,31 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let removedGlobalIndex = BuiltinDevices.all.count + sender.tag
-        customSetups.remove(at: sender.tag)
+        let removedGlobalIndex = BuiltinDevices.all.count + customIndex
+        customSetups.remove(at: customIndex)
         CustomDeviceSetupStore.save(customSetups)
         if selectedIndex == removedGlobalIndex {
             if customSetups.isEmpty {
-                sidebarTabs.selectedSegment = 0
                 selectDevice(at: 0)
             } else {
-                selectDevice(at: BuiltinDevices.all.count + min(sender.tag, customSetups.count - 1))
+                selectDevice(at: BuiltinDevices.all.count + min(customIndex, customSetups.count - 1))
             }
         } else {
             if selectedIndex > removedGlobalIndex { selectedIndex -= 1 }
             refreshDeviceLists()
         }
+    }
+
+    private func currentCustomSetup(id: String, profile: DeviceProfile) -> CustomDeviceSetup {
+        CustomDeviceSetup(
+            id: id,
+            profile: profile,
+            landscape: canvas.preview.landscape,
+            header: currentLayerSelection(.header),
+            footer: currentLayerSelection(.footer),
+            left: currentLayerSelection(.left),
+            right: currentLayerSelection(.right)
+        )
     }
 
     private func currentLayerSelection(_ kind: HTMLLayerKind) -> CustomDeviceLayerSelection {
@@ -2927,7 +3123,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             customSetups.append(savedSetup)
         }
         CustomDeviceSetupStore.save(customSetups)
-        sidebarTabs.selectedSegment = 1
         selectedIndex = BuiltinDevices.all.count
             + (customSetups.firstIndex(where: { $0.id == savedSetup.id }) ?? customSetups.count - 1)
         selectDevice(at: selectedIndex)
@@ -2962,7 +3157,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             failedCount: 0,
             resources: []
         )
-        if inspectorTabs.selectedSegment == 5 {
+        if selectedInspectorTab == .network {
             renderNetworkActivity(networkActivitySnapshot)
             refreshNetworkActivity()
         }
@@ -2974,7 +3169,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         addressField.stringValue = address
         toolbarModel.address = address
         UserDefaults.standard.set(address, forKey: "viewdeck.native.last-url")
-        if inspectorTabs.selectedSegment == 5 { refreshNetworkActivity() }
+        if selectedInspectorTab == .network { refreshNetworkActivity() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
             if let recording = self.pendingQARecording,
@@ -3043,7 +3238,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             pendingServerPreviewIdentity = nil
             serverStatusLabel.stringValue = "Server exited with an error"
         }
-        if inspectorTabs.selectedSegment == 3 { rebuildInspector() }
+        if selectedInspectorTab == .server { rebuildInspector() }
     }
 
     private func inspectAndLoadDetectedServer(_ url: URL) {
@@ -3068,7 +3263,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                                 "Port \(port) is shared by \(names). ViewDeck did not open an ambiguous localhost URL.",
                                 isError: true
                             )
-                            if self.inspectorTabs.selectedSegment == 3 || self.inspectorTabs.selectedSegment == 4 {
+                            if self.selectedInspectorTab == .server || self.selectedInspectorTab == .ports {
                                 self.rebuildInspector()
                             }
                             return
@@ -3085,7 +3280,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 )
                 self.activeServerPreviewIdentity = nextIdentity ?? self.activeServerPreviewIdentity
                 self.pendingServerPreviewIdentity = nil
-                if self.inspectorTabs.selectedSegment == 3 || self.inspectorTabs.selectedSegment == 4 {
+                if self.selectedInspectorTab == .server || self.selectedInspectorTab == .ports {
                     self.rebuildInspector()
                 }
             }
@@ -3263,11 +3458,44 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         field.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         field.target = self
         field.action = action
+        field.cell?.sendsActionOnEndEditing = true
         configureDeckField(field)
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalToConstant: 96).isActive = true
         field.heightAnchor.constraint(equalToConstant: 34).isActive = true
         return field
+    }
+
+    private func inspectorTextField(_ value: String, action: Selector) -> NSTextField {
+        let field = NSTextField(string: value)
+        field.font = .systemFont(ofSize: 10.5, weight: .medium)
+        field.target = self
+        field.action = action
+        field.cell?.sendsActionOnEndEditing = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+        configureDeckField(field)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        field.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        return field
+    }
+
+    private func inspectorPopup(
+        values: [String],
+        selected: String,
+        action: Selector
+    ) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: values)
+        popup.selectItem(withTitle: selected)
+        popup.target = self
+        popup.action = action
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: 10.5, weight: .medium)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        popup.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        return popup
     }
 
     private func makeSidebarButton(_ title: String, symbol: String, action: Selector) -> NSButton {
@@ -3362,13 +3590,15 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         return stack
     }
 
-    private func formRow(_ labelValue: String, field: NSTextField) -> NSView {
+    private func formRow(_ labelValue: String, field: NSView) -> NSView {
         let row = NSStackView()
         row.orientation = .horizontal; row.alignment = .centerY; row.distribution = .fill
         let label = NSTextField(labelWithString: labelValue)
         label.textColor = DeckTheme.muted
         label.font = .systemFont(ofSize: 11, weight: .medium)
-        if field.isEditable { field.toolTip = "Edit \(labelValue.lowercased())" }
+        if let textField = field as? NSTextField, textField.isEditable {
+            textField.toolTip = "Edit \(labelValue.lowercased())"
+        }
         row.addArrangedSubview(label); row.addArrangedSubview(field)
         row.translatesAutoresizingMaskIntoConstraints = false
         return row

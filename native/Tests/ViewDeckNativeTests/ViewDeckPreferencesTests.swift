@@ -29,15 +29,53 @@ final class ViewDeckPreferencesTests: XCTestCase {
         let restored = ViewDeckPreferences(defaults: defaults)
         XCTAssertEqual(restored.selectedDeviceID, "iphone-17-pro-max")
         XCTAssertTrue(restored.isLandscape)
-        XCTAssertEqual(restored.inspectorTabIndex(segmentCount: 5), 3)
+        XCTAssertEqual(restored.inspectorTabIndex(segmentCount: 4), 3)
     }
 
     func testFallsBackToDeviceTabForInvalidSavedTab() {
         let preferences = ViewDeckPreferences(defaults: defaults)
 
-        preferences.inspectorTabIndex = 5
+        preferences.inspectorTabIndex = 4
 
-        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 5), 0)
+        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 4), 0)
+    }
+
+    func testMigratesLegacySafeAreaTabIntoDevicePanel() {
+        defaults.set(1, forKey: "viewdeck.native.inspector-tab")
+
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 4), 0)
+        XCTAssertEqual(preferences.inspectorTabIndex, 0)
+    }
+
+    func testShiftsLegacyTabsAfterMergedSafeAreaAndLayers() {
+        defaults.set(5, forKey: "viewdeck.native.inspector-tab")
+
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 4), 3)
+        XCTAssertEqual(preferences.inspectorTabIndex, 3)
+    }
+
+    func testMigratesVersionTwoLayersTabIntoDevicePanel() {
+        defaults.set(1, forKey: "viewdeck.native.inspector-tab")
+        defaults.set(2, forKey: "viewdeck.native.inspector-tab-layout-version")
+
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 4), 0)
+        XCTAssertEqual(preferences.inspectorTabIndex, 0)
+    }
+
+    func testShiftsVersionTwoTabsAfterLayersIntoTheirNewPositions() {
+        defaults.set(4, forKey: "viewdeck.native.inspector-tab")
+        defaults.set(2, forKey: "viewdeck.native.inspector-tab-layout-version")
+
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.inspectorTabIndex(segmentCount: 4), 3)
+        XCTAssertEqual(preferences.inspectorTabIndex, 3)
     }
 
     func testPersistsNetworkShapingConfiguration() {

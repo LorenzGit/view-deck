@@ -56,6 +56,47 @@ final class CustomDeviceSetupTests: XCTestCase {
         XCTAssertEqual(edited.right.extent, 132)
     }
 
+    func testEditorPersistsTheCompleteDeviceSkin() {
+        var profile = BuiltinDevices.all[1]
+        profile.id = "custom-skin"
+        profile.builtin = false
+        let model = DeviceEditorModel(
+            setup: CustomDeviceSetup(id: profile.id, profile: profile, landscape: false)
+        )
+
+        model.platform = DevicePlatform.android.rawValue
+        model.viewportWidth = "480"
+        model.viewportHeight = "960"
+        model.dpr = "2.5"
+        model.shellTop = "12"
+        model.shellRight = "13"
+        model.shellBottom = "14"
+        model.shellLeft = "15"
+        model.cornerRadius = "48"
+        model.safeTop = "32"
+        model.safeRight = "2"
+        model.safeBottom = "24"
+        model.safeLeft = "3"
+        model.sensorType = SensorType.punch.rawValue
+        model.sensorWidth = "14"
+        model.sensorHeight = "15"
+        model.sensorTop = "16"
+        model.safariChrome = true
+        model.homeIndicator = false
+        model.landscape = true
+
+        let edited = model.makeSetup()
+
+        XCTAssertEqual(edited.profile.platform, .android)
+        XCTAssertEqual(edited.profile.viewport, Viewport(width: 480, height: 960, dpr: 2.5))
+        XCTAssertEqual(edited.profile.shell, DeviceShell(top: 12, right: 13, bottom: 14, left: 15, radius: 48))
+        XCTAssertEqual(edited.profile.safeArea, EdgeInsets(top: 32, right: 2, bottom: 24, left: 3))
+        XCTAssertEqual(edited.profile.sensor, DeviceSensor(type: .punch, width: 14, height: 15, top: 16))
+        XCTAssertTrue(edited.profile.safariChrome)
+        XCTAssertFalse(edited.profile.homeIndicator)
+        XCTAssertTrue(edited.landscape)
+    }
+
     func testNewCustomSetupEncodingRoundTripsWithoutMigration() throws {
         var profile = BuiltinDevices.all[2]
         profile.id = "round-trip"
@@ -70,5 +111,29 @@ final class CustomDeviceSetupTests: XCTestCase {
         let decoded = CustomDeviceSetupStore.decode(try JSONEncoder().encode([setup]))
 
         XCTAssertEqual(decoded, [setup])
+    }
+
+    func testStorePersistsAnEditedCompleteSetup() {
+        let suiteName = "CustomDeviceSetupTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var profile = BuiltinDevices.all[1]
+        profile.id = "saved-custom"
+        profile.name = "Saved custom"
+        profile.builtin = false
+        let setup = CustomDeviceSetup(
+            id: profile.id,
+            profile: profile,
+            landscape: true,
+            header: CustomDeviceLayerSelection(identifier: "header-id", extent: 64),
+            footer: CustomDeviceLayerSelection(identifier: "footer-id", extent: 72),
+            left: CustomDeviceLayerSelection(identifier: "left-id", extent: 128),
+            right: CustomDeviceLayerSelection(identifier: "right-id", extent: 136)
+        )
+
+        CustomDeviceSetupStore.save([setup], store: defaults)
+
+        XCTAssertEqual(CustomDeviceSetupStore.load(store: defaults), [setup])
     }
 }

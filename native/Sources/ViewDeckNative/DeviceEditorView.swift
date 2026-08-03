@@ -209,7 +209,7 @@ struct DeviceEditorView: View {
                         .foregroundStyle(text)
                     }
 
-                    section("CUSTOM SETUP") {
+                    section("ORIENTATION & LAYERS") {
                         VStack(spacing: 10) {
                             Toggle("Landscape orientation", isOn: $model.landscape)
                                 .toggleStyle(.switch)
@@ -294,7 +294,7 @@ struct DeviceEditorView: View {
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(EditorPrimaryButtonStyle())
-            .help("Save this setup to the Custom tab")
+            .help("Save this setup to the device library")
         }
         .padding(.horizontal, 22)
         .frame(height: 64)
