@@ -31,6 +31,8 @@ final class DeviceEditorModel: ObservableObject {
     @Published var safariChrome: Bool
     @Published var homeIndicator: Bool
     @Published var landscape: Bool
+    @Published var showSafeArea: Bool
+    @Published var applySafeAreaToPage: Bool
     @Published var headerLayerID: String
     @Published var footerLayerID: String
     @Published var leftLayerID: String
@@ -64,6 +66,8 @@ final class DeviceEditorModel: ObservableObject {
         safariChrome = profile.safariChrome
         homeIndicator = profile.homeIndicator
         landscape = setup.landscape
+        showSafeArea = setup.showSafeArea
+        applySafeAreaToPage = setup.applySafeAreaToPage
         headerLayerID = setup.header.identifier ?? Self.noLayerID
         footerLayerID = setup.footer.identifier ?? Self.noLayerID
         leftLayerID = setup.left.identifier ?? Self.noLayerID
@@ -109,6 +113,8 @@ final class DeviceEditorModel: ObservableObject {
             id: seed.id,
             profile: profile,
             landscape: landscape,
+            showSafeArea: showSafeArea,
+            applySafeAreaToPage: applySafeAreaToPage,
             header: layerSelection(identifier: headerLayerID, extent: headerExtent, kind: .header),
             footer: layerSelection(identifier: footerLayerID, extent: footerExtent, kind: .footer),
             left: layerSelection(identifier: leftLayerID, extent: leftExtent, kind: .left),
@@ -181,12 +187,23 @@ struct DeviceEditorView: View {
                     }
 
                     section("SAFE AREA") {
-                        LazyVGrid(columns: columns, spacing: 10) {
-                            metric("Top", value: $model.safeTop)
-                            metric("Right", value: $model.safeRight)
-                            metric("Bottom", value: $model.safeBottom)
-                            metric("Left", value: $model.safeLeft)
+                        VStack(spacing: 10) {
+                            LazyVGrid(columns: columns, spacing: 10) {
+                                metric("Top", value: $model.safeTop)
+                                metric("Right", value: $model.safeRight)
+                                metric("Bottom", value: $model.safeBottom)
+                                metric("Left", value: $model.safeLeft)
+                            }
+                            Divider().overlay(line)
+                            Toggle("Show safe-area guide", isOn: $model.showSafeArea)
+                                .toggleStyle(.switch)
+                                .help("Show the visual safe-area guide for this device")
+                            Toggle("Force page inside safe area", isOn: $model.applySafeAreaToPage)
+                                .toggleStyle(.switch)
+                                .help("Restore this device with its page constrained to the safe area")
                         }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(text)
                     }
 
                     section("SENSOR & SYSTEM UI") {
@@ -269,7 +286,7 @@ struct DeviceEditorView: View {
                 Text(editing ? "Edit custom device" : "Add custom device")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(text)
-                Text("Save device geometry, orientation, and page layers as one setup.")
+                Text("Save every Device panel setting as one setup.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(muted)
             }

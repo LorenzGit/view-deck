@@ -433,6 +433,8 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
     var id: String
     var profile: DeviceProfile
     var landscape: Bool
+    var showSafeArea: Bool
+    var applySafeAreaToPage: Bool
     var header: CustomDeviceLayerSelection
     var footer: CustomDeviceLayerSelection
     var left: CustomDeviceLayerSelection
@@ -442,6 +444,8 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
         id: String,
         profile: DeviceProfile,
         landscape: Bool,
+        showSafeArea: Bool = false,
+        applySafeAreaToPage: Bool = false,
         header: CustomDeviceLayerSelection = .none(.header),
         footer: CustomDeviceLayerSelection = .none(.footer),
         left: CustomDeviceLayerSelection = .none(.left),
@@ -450,6 +454,8 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
         self.id = id
         self.profile = profile
         self.landscape = landscape
+        self.showSafeArea = showSafeArea
+        self.applySafeAreaToPage = applySafeAreaToPage
         self.header = header
         self.footer = footer
         self.left = left
@@ -460,6 +466,19 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
         self.init(id: profile.id, profile: profile, landscape: false)
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        profile = try container.decode(DeviceProfile.self, forKey: .profile)
+        landscape = try container.decode(Bool.self, forKey: .landscape)
+        showSafeArea = try container.decodeIfPresent(Bool.self, forKey: .showSafeArea) ?? false
+        applySafeAreaToPage = try container.decodeIfPresent(Bool.self, forKey: .applySafeAreaToPage) ?? false
+        header = try container.decode(CustomDeviceLayerSelection.self, forKey: .header)
+        footer = try container.decode(CustomDeviceLayerSelection.self, forKey: .footer)
+        left = try container.decode(CustomDeviceLayerSelection.self, forKey: .left)
+        right = try container.decode(CustomDeviceLayerSelection.self, forKey: .right)
+    }
+
     func layer(_ kind: HTMLLayerKind) -> CustomDeviceLayerSelection {
         switch kind {
         case .header: header
@@ -467,6 +486,15 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
         case .left: left
         case .right: right
         }
+    }
+
+    func duplicated(id: String, name: String? = nil) -> CustomDeviceSetup {
+        var duplicate = self
+        duplicate.id = id
+        duplicate.profile.id = id
+        duplicate.profile.name = name ?? "\(profile.name) Copy"
+        duplicate.profile.builtin = false
+        return duplicate
     }
 }
 

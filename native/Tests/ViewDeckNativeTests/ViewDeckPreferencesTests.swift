@@ -19,16 +19,14 @@ final class ViewDeckPreferencesTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPersistsDeviceOrientationAndInspectorTab() {
+    func testPersistsSelectedDeviceAndInspectorTab() {
         let preferences = ViewDeckPreferences(defaults: defaults)
 
         preferences.selectedDeviceID = "iphone-17-pro-max"
-        preferences.isLandscape = true
         preferences.inspectorTabIndex = 3
 
         let restored = ViewDeckPreferences(defaults: defaults)
         XCTAssertEqual(restored.selectedDeviceID, "iphone-17-pro-max")
-        XCTAssertTrue(restored.isLandscape)
         XCTAssertEqual(restored.inspectorTabIndex(segmentCount: 4), 3)
     }
 

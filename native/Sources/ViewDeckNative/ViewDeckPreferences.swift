@@ -3,7 +3,6 @@ import Foundation
 struct ViewDeckPreferences {
     private enum Key {
         static let selectedDevice = "viewdeck.native.selected-device"
-        static let landscape = "viewdeck.native.landscape"
         static let inspectorTab = "viewdeck.native.inspector-tab"
         static let inspectorTabLayoutVersion = "viewdeck.native.inspector-tab-layout-version"
         static let projectFolder = "viewdeck.native.project-folder"
@@ -23,11 +22,6 @@ struct ViewDeckPreferences {
     var selectedDeviceID: String? {
         get { defaults.string(forKey: Key.selectedDevice) }
         nonmutating set { defaults.set(newValue, forKey: Key.selectedDevice) }
-    }
-
-    var isLandscape: Bool {
-        get { defaults.bool(forKey: Key.landscape) }
-        nonmutating set { defaults.set(newValue, forKey: Key.landscape) }
     }
 
     var inspectorTabIndex: Int {

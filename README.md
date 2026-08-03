@@ -12,7 +12,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Native AppKit interface with Apple WebKit rendering.
 - Built-in iPhone 17 Pro Max and iPhone 16 Pro browser/app profiles, plus iPad, Android-sized, and desktop profiles.
 - Phone and tablet profiles expose touch-style input capabilities to page JavaScript and CSS, including coarse-pointer and no-hover media queries.
-- Custom device setups with editable viewport, shell, sensor, corner-radius, DPR, orientation, and layer selections.
+- Custom device setups that retain every editable Device-panel value, including safe-area behavior, orientation, and layer selections.
 - Safe-area visualization, CSS variables, and optional page-padding injection.
 - Optional reusable HTML header, footer, and landscape-only side rail layers.
 - WebGL and WebGPU content through `WKWebView` when supported by the host Mac.
@@ -204,7 +204,7 @@ The proxy provides deterministic application-level conditions rather than radio 
 
 ## Device profiles and safe areas
 
-The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. Built-in and custom devices share one sidebar list so names use the full row width. Right-click any built-in to customize it, or right-click a custom device to edit or remove it. The **Device** panel exposes the name, platform, portrait/landscape orientation, viewport, shell skin, sensor, system UI, safe-area insets and behavior, browser simulation, and all HTML layers. Choose **Add to custom devices** for a built-in or **Save device changes** for a custom device to persist its complete geometry, orientation, and header, footer, left, and right layer selections. Existing custom skins migrate automatically as portrait setups with no selected layers.
+The built-in profiles provide CSS viewport dimensions, DPR, shell geometry, and optional Safari chrome. Built-in and custom devices share one sidebar list so names use the full row width. Right-click any device to duplicate it, right-click a built-in to customize it, or right-click a custom device to edit or remove it. A duplicate becomes a selected custom device and retains the source device's complete setup. The **Device** panel exposes the name, platform, portrait/landscape orientation, viewport, shell skin, sensor, system UI, safe-area insets and behavior, browser simulation, and all HTML layers. Choose **Add to custom devices** for a built-in or **Save device changes** for a custom device to persist every editable value in that panel as one device-specific setup. Selecting a different device applies its own orientation, safe-area behavior, and header, footer, left, and right layer selections instead of carrying those values across devices. Existing custom skins migrate automatically as portrait setups with no selected layers and disabled safe-area behavior.
 
 ViewDeck exposes the selected safe-area values to the page:
 

@@ -171,7 +171,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             profile: initialDevices[selectedIndex],
             networkShapingConfiguration: preferences.networkShapingConfiguration
         )
-        canvas.preview.landscape = preferences.isLandscape
         self.canvas = canvas
 
         let window = NSWindow(
@@ -199,7 +198,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let savedAddress = UserDefaults.standard.string(forKey: "viewdeck.native.last-url") ?? "http://localhost:5173"
         addressField.stringValue = savedAddress
         toolbarModel.address = savedAddress
-        restoreSavedLayers()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -586,7 +584,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             )
             save.toolTip = didJustSave
                 ? "The complete custom setup was saved"
-                : "Save the current profile, orientation, and active layers"
+                : "Save every current Device panel setting"
             save.image = NSImage(
                 systemSymbolName: didJustSave ? "checkmark.circle.fill" : "square.and.arrow.down",
                 accessibilityDescription: nil
@@ -598,7 +596,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 "Add to custom devices",
                 action: #selector(addCurrentDeviceToCustom)
             )
-            add.toolTip = "Save this edited device, its orientation, and active layers"
+            add.toolTip = "Save every current Device panel setting as a custom device"
             add.image = NSImage(systemSymbolName: "plus.square.on.square", accessibilityDescription: nil)
             add.imagePosition = .imageLeading
             inspectorStack.addArrangedSubview(add)
@@ -1410,6 +1408,15 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         edit.tag = index
         menu.addItem(edit)
 
+        let duplicate = NSMenuItem(
+            title: "Duplicate Device",
+            action: #selector(duplicateSidebarDevice(_:)),
+            keyEquivalent: ""
+        )
+        duplicate.target = self
+        duplicate.tag = index
+        menu.addItem(duplicate)
+
         if isCustom {
             menu.addItem(.separator())
             let remove = NSMenuItem(
@@ -1427,31 +1434,38 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private func selectDevice(at index: Int) {
         guard devices.indices.contains(index) else { return }
         selectedIndex = index
-        let device = devices[index]
-        canvas.preview.profile = device
-        widthField.doubleValue = device.viewport.width
-        heightField.doubleValue = device.viewport.height
-        toolbarModel.width = Int(device.viewport.width).description
-        toolbarModel.height = Int(device.viewport.height).description
-        toolbarModel.dpr = device.viewport.dpr
-        preferences.selectedDeviceID = device.id
-        if index >= BuiltinDevices.all.count {
-            applyCustomSetup(customSetups[index - BuiltinDevices.all.count])
-        }
+        let setup = deviceSetup(at: index)
+        applyDeviceSetup(setup)
+        widthField.doubleValue = setup.profile.viewport.width
+        heightField.doubleValue = setup.profile.viewport.height
+        toolbarModel.width = Int(setup.profile.viewport.width).description
+        toolbarModel.height = Int(setup.profile.viewport.height).description
+        toolbarModel.dpr = setup.profile.viewport.dpr
+        preferences.selectedDeviceID = setup.profile.id
         refreshDeviceLists()
         updateStatus()
         rebuildInspector()
     }
 
-    private func applyCustomSetup(_ setup: CustomDeviceSetup) {
+    private func deviceSetup(at index: Int) -> CustomDeviceSetup {
+        if index >= BuiltinDevices.all.count {
+            return customSetups[index - BuiltinDevices.all.count]
+        }
+        let profile = BuiltinDevices.all[index]
+        return CustomDeviceSetup(id: profile.id, profile: profile, landscape: false)
+    }
+
+    private func applyDeviceSetup(_ setup: CustomDeviceSetup) {
+        canvas.preview.profile = setup.profile
         canvas.preview.landscape = setup.landscape
-        preferences.isLandscape = setup.landscape
+        canvas.preview.showSafeArea = setup.showSafeArea
+        canvas.preview.applySafeAreaToPage = setup.applySafeAreaToPage
         for kind in HTMLLayerKind.allCases {
-            applyCustomLayer(setup.layer(kind), kind: kind)
+            applyDeviceLayer(setup.layer(kind), kind: kind)
         }
     }
 
-    private func applyCustomLayer(
+    private func applyDeviceLayer(
         _ selection: CustomDeviceLayerSelection,
         kind: HTMLLayerKind
     ) {
@@ -1465,13 +1479,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             : libraryLayer.flatMap { try? String(contentsOf: $0.url, encoding: .utf8) }
         let path = libraryLayer?.url
         let baseURL = path?.deletingLastPathComponent()
-        let activeIdentifier = html == nil ? nil : selection.identifier
-
-        if let activeIdentifier {
-            UserDefaults.standard.set(activeIdentifier, forKey: activeLayerDefaultsKey(kind))
-        } else {
-            UserDefaults.standard.removeObject(forKey: activeLayerDefaultsKey(kind))
-        }
 
         switch kind {
         case .header:
@@ -1537,7 +1544,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let landscape = sender.selectedSegment == 1
         guard canvas.preview.landscape != landscape else { return }
         canvas.preview.landscape = landscape
-        preferences.isLandscape = landscape
         updateStatus()
         rebuildInspector()
     }
@@ -1617,7 +1623,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func rotateDevice() {
         canvas.preview.landscape.toggle()
-        preferences.isLandscape = canvas.preview.landscape
         updateStatus(); rebuildInspector()
     }
 
@@ -1946,7 +1951,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         canvas.preview.profile = configuration.profile
         canvas.preview.safeArea = configuration.safeArea.configuredPortrait
         canvas.preview.landscape = configuration.orientation == "landscape"
-        preferences.isLandscape = canvas.preview.landscape
         canvas.preview.showSafeArea = configuration.safeArea.guideVisible
         canvas.preview.applySafeAreaToPage = configuration.safeArea.forcedIntoPageLayout
         applyNetworkShapingConfiguration(
@@ -2357,9 +2361,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         sampleHeaderEnabled = false
         canvas.preview.headerBaseURL = result.url.deletingLastPathComponent()
         canvas.preview.headerHTML = result.html
-        if let layer = layerLibrary.first(where: { $0.path == result.url.path && $0.kind == .header }) {
-            UserDefaults.standard.set(layer.id, forKey: "viewdeck.native.active-header-layer")
-        }
         updateStatus(); rebuildInspector()
     }
 
@@ -2369,9 +2370,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         footerPath = result.url
         canvas.preview.footerBaseURL = result.url.deletingLastPathComponent()
         canvas.preview.footerHTML = result.html
-        if let layer = layerLibrary.first(where: { $0.path == result.url.path && $0.kind == .footer }) {
-            UserDefaults.standard.set(layer.id, forKey: "viewdeck.native.active-footer-layer")
-        }
         updateStatus(); rebuildInspector()
     }
 
@@ -2381,7 +2379,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private func chooseSideLayer(kind: HTMLLayerKind) {
         guard kind.isSide, let result = chooseHTMLFile() else { return }
         addLayerToLibrary(url: result.url, kind: kind)
-        let reference = layerLibrary.first { $0.path == result.url.path && $0.kind == kind }
         if kind == .left {
             leftPath = result.url
             sampleLeftEnabled = false
@@ -2392,9 +2389,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             sampleRightEnabled = false
             canvas.preview.rightBaseURL = result.url.deletingLastPathComponent()
             canvas.preview.rightHTML = result.html
-        }
-        if let reference {
-            UserDefaults.standard.set(reference.id, forKey: activeLayerDefaultsKey(kind))
         }
         updateStatus(); rebuildInspector()
     }
@@ -2411,19 +2405,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             sampleHeaderEnabled = true
             canvas.preview.headerBaseURL = nil
             canvas.preview.headerHTML = Self.sampleHeaderHTML
-            UserDefaults.standard.set("builtin-sample-header", forKey: "viewdeck.native.active-header-layer")
         } else if let layer = layerLibrary.first(where: { $0.id == identifier }) {
             headerPath = layer.url
             sampleHeaderEnabled = false
             canvas.preview.headerBaseURL = layer.url.deletingLastPathComponent()
             canvas.preview.headerHTML = try? String(contentsOf: layer.url, encoding: .utf8)
-            UserDefaults.standard.set(layer.id, forKey: "viewdeck.native.active-header-layer")
         } else {
             headerPath = nil
             sampleHeaderEnabled = false
             canvas.preview.headerBaseURL = nil
             canvas.preview.headerHTML = nil
-            UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-header-layer")
         }
         updateStatus(); rebuildInspector()
     }
@@ -2434,12 +2425,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             footerPath = layer.url
             canvas.preview.footerBaseURL = layer.url.deletingLastPathComponent()
             canvas.preview.footerHTML = try? String(contentsOf: layer.url, encoding: .utf8)
-            UserDefaults.standard.set(layer.id, forKey: "viewdeck.native.active-footer-layer")
         } else {
             footerPath = nil
             canvas.preview.footerBaseURL = nil
             canvas.preview.footerHTML = nil
-            UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-footer-layer")
         }
         updateStatus(); rebuildInspector()
     }
@@ -2465,19 +2454,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             html = builtIn?.html
             baseURL = nil
             isBuiltIn = true
-            UserDefaults.standard.set(identifier, forKey: activeLayerDefaultsKey(kind))
         } else if let layer = layerLibrary.first(where: { $0.id == identifier }) {
             path = layer.url
             html = try? String(contentsOf: layer.url, encoding: .utf8)
             baseURL = layer.url.deletingLastPathComponent()
             isBuiltIn = false
-            UserDefaults.standard.set(layer.id, forKey: activeLayerDefaultsKey(kind))
         } else {
             path = nil
             html = nil
             baseURL = nil
             isBuiltIn = false
-            UserDefaults.standard.removeObject(forKey: activeLayerDefaultsKey(kind))
         }
         if kind == .left {
             leftPath = path
@@ -2504,15 +2490,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         canvas.preview.leftBaseURL = nil; canvas.preview.rightBaseURL = nil
         canvas.preview.headerHTML = nil; canvas.preview.footerHTML = nil
         canvas.preview.leftHTML = nil; canvas.preview.rightHTML = nil
-        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-header-layer")
-        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-footer-layer")
-        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-left-layer")
-        UserDefaults.standard.removeObject(forKey: "viewdeck.native.active-right-layer")
         updateStatus(); rebuildInspector()
-    }
-
-    private func activeLayerDefaultsKey(_ kind: HTMLLayerKind) -> String {
-        "viewdeck.native.active-\(kind.rawValue)-layer"
     }
 
     private func chooseHTMLFile() -> (url: URL, html: String)? {
@@ -2626,27 +2604,23 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 canvas.preview.headerBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.headerHTML = model.html
                 canvas.preview.headerHeight = model.parsedExtent
-                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-header-layer")
             case .footer:
                 footerPath = destination
                 canvas.preview.footerBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.footerHTML = model.html
                 canvas.preview.footerHeight = model.parsedExtent
-                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-footer-layer")
             case .left:
                 sampleLeftEnabled = false
                 leftPath = destination
                 canvas.preview.leftBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.leftHTML = model.html
                 canvas.preview.leftWidth = model.parsedExtent
-                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-left-layer")
             case .right:
                 sampleRightEnabled = false
                 rightPath = destination
                 canvas.preview.rightBaseURL = destination.deletingLastPathComponent()
                 canvas.preview.rightHTML = model.html
                 canvas.preview.rightWidth = model.parsedExtent
-                UserDefaults.standard.set(reference.id, forKey: "viewdeck.native.active-right-layer")
             }
             updateStatus(); rebuildInspector()
         } catch {
@@ -2672,59 +2646,6 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let base = slug.isEmpty ? kind.rawValue : slug
         let suffix = UUID().uuidString.prefix(8).lowercased()
         return directory.appendingPathComponent("\(base)-\(suffix).html")
-    }
-
-    private func restoreSavedLayers() {
-        let defaults = UserDefaults.standard
-        if let headerID = defaults.string(forKey: "viewdeck.native.active-header-layer") {
-            if headerID == "builtin-sample-header" {
-                sampleHeaderEnabled = true
-                canvas.preview.headerHTML = Self.sampleHeaderHTML
-            } else if let layer = layerLibrary.first(where: { $0.id == headerID }),
-                      let html = try? String(contentsOf: layer.url, encoding: .utf8) {
-                headerPath = layer.url
-                canvas.preview.headerBaseURL = layer.url.deletingLastPathComponent()
-                canvas.preview.headerHTML = html
-            }
-        }
-        if let footerID = defaults.string(forKey: "viewdeck.native.active-footer-layer"),
-           let layer = layerLibrary.first(where: { $0.id == footerID }),
-           let html = try? String(contentsOf: layer.url, encoding: .utf8) {
-            footerPath = layer.url
-            canvas.preview.footerBaseURL = layer.url.deletingLastPathComponent()
-            canvas.preview.footerHTML = html
-        }
-        restoreSavedSideLayer(kind: .left, defaults: defaults)
-        restoreSavedSideLayer(kind: .right, defaults: defaults)
-        rebuildInspector()
-        updateStatus()
-    }
-
-    private func restoreSavedSideLayer(kind: HTMLLayerKind, defaults: UserDefaults) {
-        guard kind.isSide,
-              let identifier = defaults.string(forKey: activeLayerDefaultsKey(kind)) else { return }
-        let builtIn = Self.builtInLayer(for: kind)
-        if identifier == builtIn?.id {
-            if kind == .left {
-                sampleLeftEnabled = true
-                canvas.preview.leftHTML = builtIn?.html
-            } else {
-                sampleRightEnabled = true
-                canvas.preview.rightHTML = builtIn?.html
-            }
-            return
-        }
-        guard let layer = layerLibrary.first(where: { $0.id == identifier && $0.kind == kind }),
-              let html = try? String(contentsOf: layer.url, encoding: .utf8) else { return }
-        if kind == .left {
-            leftPath = layer.url
-            canvas.preview.leftBaseURL = layer.url.deletingLastPathComponent()
-            canvas.preview.leftHTML = html
-        } else {
-            rightPath = layer.url
-            canvas.preview.rightBaseURL = layer.url.deletingLastPathComponent()
-            canvas.preview.rightHTML = html
-        }
     }
 
     private func configureLayerPopup(_ popup: NSPopUpButton, kind: HTMLLayerKind, action: Selector) {
@@ -2987,32 +2908,38 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     @objc private func editSidebarDevice(_ sender: NSMenuItem) {
-        guard devices.indices.contains(sender.tag) else { return }
+        guard devices.indices.contains(sender.tag), commitPendingInspectorEdit() else { return }
+        let setup = sidebarDeviceSetup(at: sender.tag)
         if sender.tag >= BuiltinDevices.all.count {
-            let customIndex = sender.tag - BuiltinDevices.all.count
-            let storedSetup = customSetups[customIndex]
-            let setup: CustomDeviceSetup
-            if sender.tag == selectedIndex {
-                var profile = canvas.preview.profile
-                profile.id = storedSetup.id
-                profile.builtin = false
-                setup = currentCustomSetup(id: storedSetup.id, profile: profile)
-            } else {
-                setup = storedSetup
-            }
             presentCustomDeviceEditor(setup: setup, replacing: setup.id)
             return
         }
 
         let identifier = UUID().uuidString
-        var profile = BuiltinDevices.all[sender.tag]
-        profile.id = identifier
-        profile.name += " Custom"
-        profile.builtin = false
         presentCustomDeviceEditor(
-            setup: currentCustomSetup(id: identifier, profile: profile),
+            setup: setup.duplicated(
+                id: identifier,
+                name: "\(setup.profile.name) Custom"
+            ),
             replacing: nil
         )
+    }
+
+    @objc private func duplicateSidebarDevice(_ sender: NSMenuItem) {
+        guard devices.indices.contains(sender.tag), commitPendingInspectorEdit() else { return }
+        let duplicate = sidebarDeviceSetup(at: sender.tag).duplicated(id: UUID().uuidString)
+        customSetups.append(duplicate)
+        CustomDeviceSetupStore.save(customSetups)
+        selectDevice(at: BuiltinDevices.all.count + customSetups.count - 1)
+    }
+
+    private func sidebarDeviceSetup(at index: Int) -> CustomDeviceSetup {
+        let setup = deviceSetup(at: index)
+        guard index == selectedIndex else { return setup }
+        var profile = canvas.preview.profile
+        profile.id = setup.id
+        profile.builtin = setup.profile.builtin
+        return currentCustomSetup(id: setup.id, profile: profile)
     }
 
     @objc private func removeSidebarDevice(_ sender: NSMenuItem) {
@@ -3046,10 +2973,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func currentCustomSetup(id: String, profile: DeviceProfile) -> CustomDeviceSetup {
-        CustomDeviceSetup(
+        var profile = profile
+        profile.safeArea = canvas.preview.safeArea
+        return CustomDeviceSetup(
             id: id,
             profile: profile,
             landscape: canvas.preview.landscape,
+            showSafeArea: canvas.preview.showSafeArea,
+            applySafeAreaToPage: canvas.preview.applySafeAreaToPage,
             header: currentLayerSelection(.header),
             footer: currentLayerSelection(.footer),
             left: currentLayerSelection(.left),

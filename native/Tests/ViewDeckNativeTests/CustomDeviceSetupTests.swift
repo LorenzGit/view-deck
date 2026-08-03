@@ -16,6 +16,8 @@ final class CustomDeviceSetupTests: XCTestCase {
         XCTAssertEqual(setup.id, legacyProfile.id)
         XCTAssertEqual(setup.profile, legacyProfile)
         XCTAssertFalse(setup.landscape)
+        XCTAssertFalse(setup.showSafeArea)
+        XCTAssertFalse(setup.applySafeAreaToPage)
         XCTAssertNil(setup.header.identifier)
         XCTAssertEqual(setup.header.extent, HTMLLayerKind.header.defaultExtent)
         XCTAssertNil(setup.left.identifier)
@@ -31,6 +33,8 @@ final class CustomDeviceSetupTests: XCTestCase {
             id: profile.id,
             profile: profile,
             landscape: true,
+            showSafeArea: true,
+            applySafeAreaToPage: true,
             header: CustomDeviceLayerSelection(identifier: "header-id", extent: 52),
             footer: CustomDeviceLayerSelection(identifier: "footer-id", extent: 60),
             left: CustomDeviceLayerSelection(identifier: "left-id", extent: 124),
@@ -40,6 +44,7 @@ final class CustomDeviceSetupTests: XCTestCase {
 
         model.name = "Edited setup"
         model.landscape = false
+        model.showSafeArea = false
         model.rightLayerID = DeviceEditorModel.noLayerID
         model.leftExtent = "140"
         let edited = model.makeSetup()
@@ -48,6 +53,8 @@ final class CustomDeviceSetupTests: XCTestCase {
         XCTAssertEqual(edited.profile.name, "Edited setup")
         XCTAssertFalse(edited.profile.builtin)
         XCTAssertFalse(edited.landscape)
+        XCTAssertFalse(edited.showSafeArea)
+        XCTAssertTrue(edited.applySafeAreaToPage)
         XCTAssertEqual(edited.header, setup.header)
         XCTAssertEqual(edited.footer, setup.footer)
         XCTAssertEqual(edited.left.identifier, "left-id")
@@ -84,6 +91,8 @@ final class CustomDeviceSetupTests: XCTestCase {
         model.safariChrome = true
         model.homeIndicator = false
         model.landscape = true
+        model.showSafeArea = true
+        model.applySafeAreaToPage = true
 
         let edited = model.makeSetup()
 
@@ -95,6 +104,8 @@ final class CustomDeviceSetupTests: XCTestCase {
         XCTAssertTrue(edited.profile.safariChrome)
         XCTAssertFalse(edited.profile.homeIndicator)
         XCTAssertTrue(edited.landscape)
+        XCTAssertTrue(edited.showSafeArea)
+        XCTAssertTrue(edited.applySafeAreaToPage)
     }
 
     func testNewCustomSetupEncodingRoundTripsWithoutMigration() throws {
@@ -105,12 +116,69 @@ final class CustomDeviceSetupTests: XCTestCase {
             id: profile.id,
             profile: profile,
             landscape: true,
+            showSafeArea: true,
+            applySafeAreaToPage: true,
             left: CustomDeviceLayerSelection(identifier: "rail", extent: 144)
         )
 
         let decoded = CustomDeviceSetupStore.decode(try JSONEncoder().encode([setup]))
 
         XCTAssertEqual(decoded, [setup])
+    }
+
+    func testDuplicateRetainsEverySettingWithNewCustomIdentity() {
+        var profile = BuiltinDevices.all[1]
+        let setup = CustomDeviceSetup(
+            id: profile.id,
+            profile: profile,
+            landscape: true,
+            showSafeArea: true,
+            applySafeAreaToPage: true,
+            header: CustomDeviceLayerSelection(identifier: "header-id", extent: 64),
+            footer: CustomDeviceLayerSelection(identifier: "footer-id", extent: 72),
+            left: CustomDeviceLayerSelection(identifier: "left-id", extent: 128),
+            right: CustomDeviceLayerSelection(identifier: "right-id", extent: 136)
+        )
+
+        let duplicate = setup.duplicated(id: "duplicate-id")
+
+        profile.id = "duplicate-id"
+        profile.name += " Copy"
+        profile.builtin = false
+        XCTAssertEqual(
+            duplicate,
+            CustomDeviceSetup(
+                id: "duplicate-id",
+                profile: profile,
+                landscape: setup.landscape,
+                showSafeArea: setup.showSafeArea,
+                applySafeAreaToPage: setup.applySafeAreaToPage,
+                header: setup.header,
+                footer: setup.footer,
+                left: setup.left,
+                right: setup.right
+            )
+        )
+    }
+
+    func testDecodesSavedSetupFromBeforeSafeAreaBehaviorBecameDeviceSettings() throws {
+        var profile = BuiltinDevices.all[1]
+        profile.id = "legacy-setup"
+        profile.builtin = false
+        let setup = CustomDeviceSetup(id: profile.id, profile: profile, landscape: true)
+        var encoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode([setup])) as? [[String: Any]]
+        )
+        encoded[0].removeValue(forKey: "showSafeArea")
+        encoded[0].removeValue(forKey: "applySafeAreaToPage")
+
+        let decoded = CustomDeviceSetupStore.decode(
+            try JSONSerialization.data(withJSONObject: encoded)
+        )
+
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertFalse(decoded[0].showSafeArea)
+        XCTAssertFalse(decoded[0].applySafeAreaToPage)
     }
 
     func testStorePersistsAnEditedCompleteSetup() {
@@ -126,6 +194,8 @@ final class CustomDeviceSetupTests: XCTestCase {
             id: profile.id,
             profile: profile,
             landscape: true,
+            showSafeArea: true,
+            applySafeAreaToPage: true,
             header: CustomDeviceLayerSelection(identifier: "header-id", extent: 64),
             footer: CustomDeviceLayerSelection(identifier: "footer-id", extent: 72),
             left: CustomDeviceLayerSelection(identifier: "left-id", extent: 128),
