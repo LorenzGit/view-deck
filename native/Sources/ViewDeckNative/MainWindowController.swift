@@ -91,6 +91,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var hasRestoredSplitPositions = false
     private var sidebarMinimumWidthConstraint: NSLayoutConstraint?
     private var screenshotEditors: [ScreenshotEditorWindowController] = []
+    private var agentPromptWindowController: ViewDeckAgentPromptWindowController?
     private var standaloneVideoRecorder: LivePreviewVideoRecorder?
     private var qaRecorder: QAScenarioRecorder?
     private var pendingQARecording: QARecordingRequest?
@@ -1374,8 +1375,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             let isCustom = index >= BuiltinDevices.all.count
             button.tag = index
             button.toolTip = isCustom
-                ? "Apply \(device.name). Right-click to edit or remove it."
-                : "Preview with \(device.name). Right-click to customize it."
+                ? "Apply \(device.name). Right-click for agent prompts, editing, or removal."
+                : "Preview with \(device.name). Right-click for an agent prompt or customization."
             button.menu = deviceContextMenu(at: index)
             button.state = index == selectedIndex ? .on : .off
             applySidebarSelection(button, selected: index == selectedIndex)
@@ -1399,6 +1400,17 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private func deviceContextMenu(at index: Int) -> NSMenu {
         let menu = NSMenu()
         let isCustom = index >= BuiltinDevices.all.count
+        let prompt = NSMenuItem(
+            title: "Create Agent Prompt…",
+            action: #selector(createAgentPromptForSidebarDevice(_:)),
+            keyEquivalent: ""
+        )
+        prompt.target = self
+        prompt.tag = index
+        prompt.image = NSImage(systemSymbolName: "text.bubble", accessibilityDescription: nil)
+        menu.addItem(prompt)
+        menu.addItem(.separator())
+
         let edit = NSMenuItem(
             title: isCustom ? "Edit Device…" : "Customize Device…",
             action: #selector(editSidebarDevice(_:)),
@@ -2922,6 +2934,70 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 name: "\(setup.profile.name) Custom"
             ),
             replacing: nil
+        )
+    }
+
+    @objc private func createAgentPromptForSidebarDevice(_ sender: NSMenuItem) {
+        guard devices.indices.contains(sender.tag), commitPendingInspectorEdit() else { return }
+        let setup = sidebarDeviceSetup(at: sender.tag)
+        let source = agentPromptSource
+        let projectLaunch = agentPromptProjectLaunch
+        let configuration = ViewDeckAgentPromptConfiguration(
+            setup: setup,
+            sourceKind: source.kind,
+            sourceValue: source.value,
+            projectLaunch: projectLaunch.mode,
+            launchValue: projectLaunch.value,
+            layers: Dictionary(uniqueKeysWithValues: HTMLLayerKind.allCases.map { kind in
+                (kind, agentPromptLayer(kind, setup: setup))
+            }),
+            network: canvas.preview.networkShapingConfiguration
+        )
+        agentPromptWindowController?.close()
+        let controller = ViewDeckAgentPromptWindowController(configuration: configuration)
+        agentPromptWindowController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private var agentPromptSource: (kind: ViewDeckAgentSourceKind, value: String) {
+        if launchMode == .staticHTML, let staticHTMLFile {
+            return (.htmlFile, staticHTMLFile.standardizedFileURL.path)
+        }
+        if let projectFolder {
+            return (.project, projectFolder.standardizedFileURL.path)
+        }
+        return (.url, addressField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var agentPromptProjectLaunch: (mode: ViewDeckAgentProjectLaunch, value: String) {
+        if launchMode == .customCommand {
+            return (.customCommand, customCommandField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return (.npmScript, scriptPopup.titleOfSelectedItem ?? "dev")
+    }
+
+    private func agentPromptLayer(
+        _ kind: HTMLLayerKind,
+        setup: CustomDeviceSetup
+    ) -> ViewDeckAgentLayerConfiguration {
+        let selection = setup.layer(kind)
+        guard let identifier = selection.identifier else { return .empty(kind) }
+        if let reference = layerLibrary.first(where: { $0.kind == kind && $0.id == identifier }) {
+            return ViewDeckAgentLayerConfiguration(
+                name: reference.name,
+                path: reference.url.standardizedFileURL.path,
+                extent: ViewDeckAgentPromptConfiguration.number(selection.extent),
+                isSelected: true
+            )
+        }
+        let name = Self.builtInLayer(for: kind).flatMap { $0.id == identifier ? $0.name : nil }
+            ?? identifier
+        return ViewDeckAgentLayerConfiguration(
+            name: name,
+            path: "",
+            extent: ViewDeckAgentPromptConfiguration.number(selection.extent),
+            isSelected: true
         )
     }
 
