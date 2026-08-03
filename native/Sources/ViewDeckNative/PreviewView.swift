@@ -978,7 +978,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
                   let image = PreviewImageEncoding.image(
                       from: cropped,
                       pixelsWide: targetWidth,
-                      pixelsHigh: targetHeight
+                      pixelsHigh: targetHeight,
+                      pointSize: captureBounds.size
                   ) else {
                 DispatchQueue.main.async {
                     completion(.failure(PreviewScreenshotError.windowCompositorUnavailable))

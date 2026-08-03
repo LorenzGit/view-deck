@@ -38,9 +38,18 @@ enum PreviewImageEncoding {
         return CGSize(width: representation.pixelsWide, height: representation.pixelsHigh)
     }
 
-    static func image(from source: CGImage, pixelsWide: Int, pixelsHigh: Int) -> NSImage? {
+    static func image(
+        from source: CGImage,
+        pixelsWide: Int,
+        pixelsHigh: Int,
+        pointSize: CGSize
+    ) -> NSImage? {
         let width = max(1, pixelsWide)
         let height = max(1, pixelsHigh)
+        let resolvedPointSize = CGSize(
+            width: max(1, pointSize.width),
+            height: max(1, pointSize.height)
+        )
         guard let context = CGContext(
             data: nil,
             width: width,
@@ -59,8 +68,8 @@ enum PreviewImageEncoding {
         context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let rendered = context.makeImage() else { return nil }
         let representation = NSBitmapImageRep(cgImage: rendered)
-        representation.size = CGSize(width: width, height: height)
-        let image = NSImage(size: representation.size)
+        representation.size = resolvedPointSize
+        let image = NSImage(size: resolvedPointSize)
         image.addRepresentation(representation)
         return image
     }

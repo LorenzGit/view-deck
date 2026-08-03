@@ -23,7 +23,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Live localhost port inventory with process, command, working-directory, collision, open, and stop controls.
 - Deterministic per-preview network shaping for round-trip latency, jitter, upload/download bandwidth, and offline behavior.
 - Resizable side panels and a compact, responsive workspace.
-- One-click screen-only device screenshots with editable text, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
+- One-click screen-only device screenshots with editable, resizable text boxes that keep wrapped text visible, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
 - A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
 - Record and replay portable QA scenarios containing timed pointer, mouse, form, and keyboard input, critical-moment screenshots, MP4 video, and the complete device configuration.
 
@@ -125,7 +125,7 @@ Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-i
 
 ### Test scenarios
 
-The **Test Tools** card separates one-off capture from repeatable test scenarios. Under **Capture**, **Screenshot** captures the current device and opens the markup editor, while **Record video** starts a standalone 30 FPS MP4 recording that runs until you click **Stop video**.
+The **Test Tools** card separates one-off capture from repeatable test scenarios. Under **Capture**, **Markup** captures the current device and opens the markup editor, while **Record video** starts a standalone 30 FPS MP4 recording that runs until you click **Stop video**.
 
 Under **Test scenarios**, click **Record test**, choose a `.viewdeck.json` destination, optionally enable **Include an MP4 with this test recording**, and interact with the page normally. ViewDeck first clears site-scoped WebKit data and client storage, then reloads the page before timing begins so first-run experiences, tutorials, and cache-backed state start cleanly. It records pointer down/move/up, mouse clicks and drags, keyboard down/up (including code, modifiers, location, composition, and repeat), and form changes. Every event contains both its timestamp from the start of the run and the interval since the previous event. A derived `gestures` section classifies clicks/taps, drags, swipes, direction, distance, duration, sampled points, source event IDs, and the interval since the previous gesture.
 

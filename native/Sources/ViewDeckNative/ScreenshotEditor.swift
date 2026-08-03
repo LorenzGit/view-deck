@@ -86,6 +86,83 @@ enum ScreenshotTextLayout {
     }
 }
 
+enum ScreenshotTextResizeHandle: Equatable {
+    case width
+    case height
+    case both
+}
+
+enum ScreenshotTextBoxGeometry {
+    static let contentInset = CGSize(width: 10, height: 9)
+    static let minimumSize = CGSize(width: 80, height: 44)
+
+    static func defaultSize(for value: String, font: NSFont) -> CGSize {
+        let measuredWidth = ScreenshotTextLayout.idealWidth(for: value, font: font)
+        let contentWidth = min(440, max(290, measuredWidth + 50))
+        let textSize = ScreenshotTextLayout.size(
+            for: value,
+            font: font,
+            layoutWidth: contentWidth
+        )
+        return sizeEnsuringTextFits(CGSize(
+            width: contentWidth + contentInset.width * 2,
+            height: min(220, max(116, textSize.height + 44))
+        ), value: value, font: font)
+    }
+
+    static func contentRect(in frame: CGRect) -> CGRect {
+        frame.insetBy(dx: contentInset.width, dy: contentInset.height)
+    }
+
+    static func point(for handle: ScreenshotTextResizeHandle, in frame: CGRect) -> CGPoint {
+        switch handle {
+        case .width: return CGPoint(x: frame.maxX, y: frame.midY)
+        case .height: return CGPoint(x: frame.midX, y: frame.maxY)
+        case .both: return CGPoint(x: frame.maxX, y: frame.maxY)
+        }
+    }
+
+    static func handle(at point: CGPoint, in frame: CGRect) -> ScreenshotTextResizeHandle? {
+        let handles: [ScreenshotTextResizeHandle] = [.both, .width, .height]
+        return handles.first { handle in
+            let handlePoint = self.point(for: handle, in: frame)
+            return hypot(point.x - handlePoint.x, point.y - handlePoint.y) <= 12
+        }
+    }
+
+    static func resizedSize(
+        _ size: CGSize,
+        using handle: ScreenshotTextResizeHandle,
+        translation: CGSize,
+        value: String,
+        font: NSFont
+    ) -> CGSize {
+        var result = size
+        if handle == .width || handle == .both {
+            result.width = max(minimumSize.width, size.width + translation.width)
+        }
+        if handle == .height || handle == .both {
+            result.height = max(minimumSize.height, size.height + translation.height)
+        }
+        return sizeEnsuringTextFits(result, value: value, font: font)
+    }
+
+    static func sizeEnsuringTextFits(_ size: CGSize, value: String, font: NSFont) -> CGSize {
+        let width = max(minimumSize.width, size.width)
+        let contentWidth = max(1, width - contentInset.width * 2)
+        let textHeight = ScreenshotTextLayout.size(
+            for: value,
+            font: font,
+            layoutWidth: contentWidth
+        ).height
+        let minimumHeight = max(
+            minimumSize.height,
+            ceil(textHeight + contentInset.height * 2)
+        )
+        return CGSize(width: width, height: max(minimumHeight, size.height))
+    }
+}
+
 enum ScreenshotArrowGeometry {
     static func defaultControl(start: CGPoint, end: CGPoint) -> CGPoint {
         CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
@@ -247,7 +324,7 @@ private struct ScreenshotAnnotation {
     enum Kind {
         case stroke([CGPoint])
         case arrow(start: CGPoint, control: CGPoint, end: CGPoint)
-        case text(value: String, origin: CGPoint, layoutWidth: CGFloat)
+        case text(value: String, origin: CGPoint, boxSize: CGSize)
     }
 
     var kind: Kind
@@ -283,6 +360,19 @@ private struct ScreenshotAnnotation {
         return false
     }
 
+    mutating func ensureTextFits() {
+        guard case .text(let value, let origin, let boxSize) = kind else { return }
+        kind = .text(
+            value: value,
+            origin: origin,
+            boxSize: ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+                boxSize,
+                value: value,
+                font: textFont
+            )
+        )
+    }
+
     var bounds: CGRect {
         switch kind {
         case .stroke(let points):
@@ -299,14 +389,8 @@ private struct ScreenshotAnnotation {
                 end: end,
                 lineWidth: lineWidth
             )
-        case .text(let value, let origin, let layoutWidth):
-            let size = textSize(for: value, layoutWidth: layoutWidth)
-            return CGRect(
-                x: origin.x,
-                y: origin.y,
-                width: size.width,
-                height: size.height
-            ).insetBy(dx: -5, dy: -5)
+        case .text(_, let origin, let boxSize):
+            return CGRect(origin: origin, size: boxSize)
         }
     }
 
@@ -320,11 +404,11 @@ private struct ScreenshotAnnotation {
                 control: CGPoint(x: control.x + delta.width, y: control.y + delta.height),
                 end: CGPoint(x: end.x + delta.width, y: end.y + delta.height)
             )
-        case .text(let value, let origin, let layoutWidth):
+        case .text(let value, let origin, let boxSize):
             kind = .text(
                 value: value,
                 origin: CGPoint(x: origin.x + delta.width, y: origin.y + delta.height),
-                layoutWidth: layoutWidth
+                boxSize: boxSize
             )
         }
     }
@@ -404,15 +488,15 @@ private struct ScreenshotAnnotation {
             head.lineCapStyle = .round
             head.lineJoinStyle = .round
             head.stroke()
-        case .text(let value, let origin, let layoutWidth):
+        case .text(let value, let origin, let boxSize):
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: textFont,
                 .foregroundColor: color,
                 .paragraphStyle: ScreenshotTextLayout.paragraphStyle()
             ]
-            let size = textSize(for: value, layoutWidth: layoutWidth)
+            let frame = CGRect(origin: translated(origin), size: boxSize)
             (value as NSString).draw(
-                with: CGRect(origin: translated(origin), size: size),
+                with: ScreenshotTextBoxGeometry.contentRect(in: frame),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: attributes
             )
@@ -425,6 +509,8 @@ private struct ScreenshotAnnotation {
                 control: translated(control),
                 end: translated(end)
             )
+        } else if selected, case .text(_, let origin, let boxSize) = kind {
+            drawTextSelection(frame: CGRect(origin: translated(origin), size: boxSize))
         } else if selected {
             let selectionBounds = bounds
                 .offsetBy(dx: offset.width, dy: offset.height)
@@ -446,6 +532,33 @@ private struct ScreenshotAnnotation {
                 handle.lineWidth = 1
                 handle.stroke()
             }
+        }
+    }
+
+    private func drawTextSelection(frame: CGRect) {
+        let accent = NSColor(hex: 0x93d7ff)
+        let selection = NSBezierPath(roundedRect: frame, xRadius: 5, yRadius: 5)
+        selection.lineWidth = 1.25
+        accent.withAlphaComponent(0.95).setStroke()
+        selection.stroke()
+
+        for handle in [
+            ScreenshotTextResizeHandle.width,
+            .height,
+            .both
+        ] {
+            let point = ScreenshotTextBoxGeometry.point(for: handle, in: frame)
+            let path = NSBezierPath(roundedRect: CGRect(
+                x: point.x - 4,
+                y: point.y - 4,
+                width: 8,
+                height: 8
+            ), xRadius: 2, yRadius: 2)
+            accent.setFill()
+            path.fill()
+            NSColor(hex: 0x0b1118).setStroke()
+            path.lineWidth = 1
+            path.stroke()
         }
     }
 
@@ -512,10 +625,6 @@ private struct ScreenshotAnnotation {
         return false
     }
 
-    private func textSize(for value: String, layoutWidth: CGFloat) -> CGSize {
-        ScreenshotTextLayout.size(for: value, font: textFont, layoutWidth: layoutWidth)
-    }
-
     private func distance(from point: CGPoint, toSegmentFrom start: CGPoint, to end: CGPoint) -> CGFloat {
         let dx = end.x - start.x
         let dy = end.y - start.y
@@ -549,6 +658,7 @@ private enum ScreenshotSelectionInteraction {
     case arrowOrigin
     case arrowCurve
     case arrowPoint
+    case textResize(ScreenshotTextResizeHandle)
 
     var undoActionName: String {
         switch self {
@@ -556,6 +666,7 @@ private enum ScreenshotSelectionInteraction {
         case .arrowOrigin: return "Change Arrow Origin"
         case .arrowCurve: return "Curve Arrow"
         case .arrowPoint: return "Change Arrow Point"
+        case .textResize: return "Resize Text Box"
         }
     }
 }
@@ -578,8 +689,6 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
     private let annotationUndoManager = UndoManager()
     private var editingTextView: NSTextView?
     private var editingContainer: NSScrollView?
-    private var editingOrigin: CGPoint?
-    private var editingTextLayoutWidth: CGFloat?
     private var editingAnnotationIndex: Int?
     private var editingPreviousAnnotations: [ScreenshotAnnotation]?
     private var isExporting = false
@@ -666,10 +775,11 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         annotationLineWidth = resolvedWidth
         if let editingTextView {
             editingTextView.font = ScreenshotAnnotation(
-                kind: .text(value: editingTextView.string, origin: .zero, layoutWidth: 1),
+                kind: .text(value: editingTextView.string, origin: .zero, boxSize: .zero),
                 color: editingTextView.textColor ?? annotationColor,
                 lineWidth: resolvedWidth
             ).textFont
+            growEditingTextBoxToFitText()
         }
         guard let selectedIndex, annotations.indices.contains(selectedIndex) else {
             onStateChange?()
@@ -678,6 +788,7 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         guard abs(annotations[selectedIndex].lineWidth - resolvedWidth) > 0.01 else { return }
         let previous = annotations
         annotations[selectedIndex].lineWidth = resolvedWidth
+        annotations[selectedIndex].ensureTextFits()
         registerUndo(previous: previous, actionName: "Change Thickness")
         needsDisplay = true
         onStateChange?()
@@ -753,6 +864,8 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         case .select:
             if let handleInteraction = selectedArrowHandle(at: point) {
                 selectionInteraction = handleInteraction
+            } else if let handle = selectedTextResizeHandle(at: point) {
+                selectionInteraction = .textResize(handle)
             } else {
                 selectedIndex = annotations.indices.reversed().first { annotations[$0].contains(point) }
                 selectionInteraction = selectedIndex == nil ? nil : .move
@@ -858,6 +971,21 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
                         end: point
                     ),
                     end: point
+                )
+            case .textResize(let handle):
+                guard case .text(let value, let origin, let boxSize) = originalSelectedAnnotation.kind else {
+                    return
+                }
+                annotations[index].kind = .text(
+                    value: value,
+                    origin: origin,
+                    boxSize: ScreenshotTextBoxGeometry.resizedSize(
+                        boxSize,
+                        using: handle,
+                        translation: CGSize(width: point.x - start.x, height: point.y - start.y),
+                        value: value,
+                        font: originalSelectedAnnotation.textFont
+                    )
                 )
             }
         case .draw:
@@ -973,16 +1101,33 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         addCursorRect(bounds, cursor: cursor)
         guard tool == .select,
               let selectedIndex,
-              annotations.indices.contains(selectedIndex),
-              case .arrow(let start, let control, let end) = annotations[selectedIndex].kind else {
+              annotations.indices.contains(selectedIndex) else {
             return
         }
-        let curvePoint = ScreenshotArrowGeometry.curvePoint(start: start, control: control, end: end)
-        for point in [start, curvePoint, end] {
-            addCursorRect(
-                CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20),
-                cursor: .crosshair
-            )
+        switch annotations[selectedIndex].kind {
+        case .arrow(let start, let control, let end):
+            let curvePoint = ScreenshotArrowGeometry.curvePoint(start: start, control: control, end: end)
+            for point in [start, curvePoint, end] {
+                addCursorRect(
+                    CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20),
+                    cursor: .crosshair
+                )
+            }
+        case .text(_, let origin, let boxSize):
+            let frame = CGRect(origin: origin, size: boxSize)
+            for (handle, cursor) in [
+                (ScreenshotTextResizeHandle.width, NSCursor.resizeLeftRight),
+                (.height, NSCursor.resizeUpDown),
+                (.both, NSCursor.crosshair)
+            ] {
+                let point = ScreenshotTextBoxGeometry.point(for: handle, in: frame)
+                addCursorRect(
+                    CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20),
+                    cursor: cursor
+                )
+            }
+        case .stroke:
+            break
         }
     }
 
@@ -1005,6 +1150,18 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         }?.1
     }
 
+    private func selectedTextResizeHandle(at point: CGPoint) -> ScreenshotTextResizeHandle? {
+        guard let selectedIndex,
+              annotations.indices.contains(selectedIndex),
+              case .text(_, let origin, let boxSize) = annotations[selectedIndex].kind else {
+            return nil
+        }
+        return ScreenshotTextBoxGeometry.handle(
+            at: point,
+            in: CGRect(origin: origin, size: boxSize)
+        )
+    }
+
     private func invalidateCursorRects() {
         guard let window else { return }
         window.invalidateCursorRects(for: self)
@@ -1023,6 +1180,10 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
             return true
         }
         return false
+    }
+
+    func textDidChange(_ notification: Notification) {
+        growEditingTextBoxToFitText()
     }
 
     private func drawGrid(in dirtyRect: CGRect) {
@@ -1078,21 +1239,21 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
             value: "",
             color: annotationColor,
             lineWidth: annotationLineWidth,
-            layoutWidth: nil,
+            boxSize: nil,
             annotationIndex: nil
         )
     }
 
     private func beginTextEditing(annotationAt index: Int) {
         guard annotations.indices.contains(index),
-              case .text(let value, let origin, let layoutWidth) = annotations[index].kind else { return }
+              case .text(let value, let origin, let boxSize) = annotations[index].kind else { return }
         let annotation = annotations[index]
         presentTextEditor(
             at: origin,
             value: value,
             color: annotation.color,
             lineWidth: annotation.lineWidth,
-            layoutWidth: layoutWidth,
+            boxSize: boxSize,
             annotationIndex: index
         )
     }
@@ -1102,36 +1263,28 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         value: String,
         color: NSColor,
         lineWidth: CGFloat,
-        layoutWidth: CGFloat?,
+        boxSize: CGSize?,
         annotationIndex: Int?
     ) {
         let annotation = ScreenshotAnnotation(
-            kind: .text(value: value, origin: point, layoutWidth: layoutWidth ?? 1),
+            kind: .text(value: value, origin: point, boxSize: boxSize ?? .zero),
             color: color,
             lineWidth: lineWidth
         )
-        let measuredWidth = ScreenshotTextLayout.idealWidth(for: value, font: annotation.textFont)
-        let editorTextWidth = min(440, max(290, layoutWidth ?? measuredWidth + 50))
-        let previewLayout = ScreenshotTextLayout.size(
-            for: value,
-            font: annotation.textFont,
-            layoutWidth: layoutWidth ?? editorTextWidth
+        let requestedBoxSize = boxSize
+            ?? ScreenshotTextBoxGeometry.defaultSize(for: value, font: annotation.textFont)
+        let resolvedBoxSize = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            requestedBoxSize,
+            value: value,
+            font: annotation.textFont
         )
-        let editorSize = CGSize(
-            width: editorTextWidth + 20,
-            height: min(220, max(116, previewLayout.height + 44))
-        )
-        let container = NSScrollView(frame: CGRect(
-            x: point.x - 7,
-            y: point.y - 5,
-            width: editorSize.width,
-            height: editorSize.height
-        ))
+        let container = NSScrollView(frame: CGRect(origin: point, size: resolvedBoxSize))
         container.drawsBackground = true
         container.backgroundColor = NSColor(hex: 0x121820, alpha: 0.98)
         container.borderType = .noBorder
         container.hasVerticalScroller = true
         container.autohidesScrollers = true
+        container.scrollerStyle = .overlay
         container.wantsLayer = true
         container.layer?.cornerRadius = 9
         container.layer?.borderWidth = 1.5
@@ -1150,8 +1303,9 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainerInset = CGSize(width: 10, height: 9)
+        textView.textContainerInset = ScreenshotTextBoxGeometry.contentInset
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineFragmentPadding = 0
         textView.delegate = self
         textView.finishEditing = { [weak self] in self?.commitTextEditing() }
         textView.cancelEditing = { [weak self] in self?.cancelTextEditing() }
@@ -1161,8 +1315,6 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
 
         editingTextView = textView
         editingContainer = container
-        editingOrigin = point
-        editingTextLayoutWidth = layoutWidth
         editingAnnotationIndex = annotationIndex
         editingPreviousAnnotations = annotations
         selectedIndex = annotationIndex
@@ -1173,24 +1325,40 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         onStateChange?()
     }
 
+    private func growEditingTextBoxToFitText() {
+        guard let textView = editingTextView,
+              let container = editingContainer,
+              let font = textView.font else { return }
+        let resolvedSize = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            container.frame.size,
+            value: textView.string,
+            font: font
+        )
+        guard resolvedSize.height > container.frame.height + 0.5 else { return }
+        var frame = container.frame
+        frame.size.height = resolvedSize.height
+        container.frame = frame
+        needsDisplay = true
+        onStateChange?()
+    }
+
     private func commitTextEditing() {
-        guard let textView = editingTextView, let origin = editingOrigin else { return }
+        guard let textView = editingTextView, let container = editingContainer else { return }
         let annotationIndex = editingAnnotationIndex
         let previous = editingPreviousAnnotations ?? annotations
         let color = textView.textColor ?? annotationColor
+        let origin = container.frame.origin
+        let value = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let font = textView.font ?? NSFont.systemFont(ofSize: 22)
-        let availableLayoutWidth = max(1, textView.bounds.width - textView.textContainerInset.width * 2)
-        let layoutWidth = editingTextLayoutWidth ?? min(
-            availableLayoutWidth,
-            ScreenshotTextLayout.idealWidth(for: textView.string, font: font)
+        let boxSize = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            container.frame.size,
+            value: value,
+            font: font
         )
         editingTextView = nil
         editingContainer = nil
-        editingOrigin = nil
-        editingTextLayoutWidth = nil
         editingAnnotationIndex = nil
         editingPreviousAnnotations = nil
-        let value = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         textView.enclosingScrollView?.removeFromSuperview()
         if let annotationIndex, annotations.indices.contains(annotationIndex) {
             if value.isEmpty {
@@ -1200,14 +1368,14 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
                 annotations[annotationIndex].kind = .text(
                     value: value,
                     origin: origin,
-                    layoutWidth: layoutWidth
+                    boxSize: boxSize
                 )
                 selectedIndex = annotationIndex
             }
             registerUndo(previous: previous, actionName: "Edit Text")
         } else if !value.isEmpty {
             annotations.append(ScreenshotAnnotation(
-                kind: .text(value: value, origin: origin, layoutWidth: layoutWidth),
+                kind: .text(value: value, origin: origin, boxSize: boxSize),
                 color: color,
                 lineWidth: annotationLineWidth
             ))
@@ -1223,8 +1391,6 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
         editingContainer?.removeFromSuperview()
         editingTextView = nil
         editingContainer = nil
-        editingOrigin = nil
-        editingTextLayoutWidth = nil
         editingAnnotationIndex = nil
         editingPreviousAnnotations = nil
         window?.makeFirstResponder(self)
@@ -1559,7 +1725,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
             widthSlider.doubleValue = Double(selection.lineWidth)
             widthLabel.stringValue = "\(Int(selection.lineWidth.rounded())) pt"
             if selection.isText {
-                statusLabel.stringValue = "Text selected · change color or weight above · double-click or press Return to edit"
+                statusLabel.stringValue = "Text selected · drag a handle to resize · the box keeps every line visible · double-click to edit"
             } else if selection.isArrow {
                 statusLabel.stringValue = canvas.tool == .select
                     ? "Arrow selected · drag the origin, diamond curve handle, or point · drag the line to reposition"
@@ -1580,7 +1746,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
 
     private func statusMessage(for tool: ScreenshotTool) -> String {
         switch tool {
-        case .select: return "Select markup to restyle or move it · double-click text to edit"
+        case .select: return "Select markup to restyle, move, or resize text boxes · double-click text to edit"
         case .draw: return "Draw freely — the canvas extends beyond the screenshot"
         case .arrow: return "Drag from the point of interest toward your callout"
         case .text: return "Click anywhere to place a multiline text note"

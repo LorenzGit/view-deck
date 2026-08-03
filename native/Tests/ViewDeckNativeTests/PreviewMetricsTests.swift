@@ -874,6 +874,130 @@ final class PreviewMetricsTests: XCTestCase {
         XCTAssertGreaterThan(wrapped.height, singleLine.height * 2)
     }
 
+    func testScreenshotTextBoxUsesSharedEditingAndDrawingInsets() {
+        let frame = CGRect(x: 40, y: 80, width: 310, height: 116)
+
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.contentRect(in: frame),
+            CGRect(x: 50, y: 89, width: 290, height: 98)
+        )
+    }
+
+    func testScreenshotTextBoxResizesEachAxisIndependently() {
+        let size = CGSize(width: 200, height: 100)
+        let translation = CGSize(width: 50, height: 70)
+        let font = NSFont.systemFont(ofSize: 22)
+
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.resizedSize(
+                size,
+                using: .width,
+                translation: translation,
+                value: "",
+                font: font
+            ),
+            CGSize(width: 250, height: 100)
+        )
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.resizedSize(
+                size,
+                using: .height,
+                translation: translation,
+                value: "",
+                font: font
+            ),
+            CGSize(width: 200, height: 170)
+        )
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.resizedSize(
+                size,
+                using: .both,
+                translation: translation,
+                value: "",
+                font: font
+            ),
+            CGSize(width: 250, height: 170)
+        )
+    }
+
+    func testScreenshotTextBoxResizeStopsAtReadableMinimum() {
+        let font = NSFont.systemFont(ofSize: 22)
+        let expected = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            ScreenshotTextBoxGeometry.minimumSize,
+            value: "",
+            font: font
+        )
+
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.resizedSize(
+                CGSize(width: 200, height: 100),
+                using: .both,
+                translation: CGSize(width: -500, height: -500),
+                value: "",
+                font: font
+            ),
+            expected
+        )
+    }
+
+    func testScreenshotTextBoxExpandsToShowAllWrappedLines() {
+        let font = NSFont.systemFont(ofSize: 22, weight: .medium)
+        let value = "Every line of this longer annotation must remain visible after the box becomes narrow."
+        let size = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            CGSize(width: 120, height: 44),
+            value: value,
+            font: font
+        )
+        let contentRect = ScreenshotTextBoxGeometry.contentRect(
+            in: CGRect(origin: .zero, size: size)
+        )
+        let textSize = ScreenshotTextLayout.size(
+            for: value,
+            font: font,
+            layoutWidth: contentRect.width
+        )
+
+        XCTAssertGreaterThan(size.height, 44)
+        XCTAssertGreaterThanOrEqual(contentRect.height, textSize.height)
+    }
+
+    func testScreenshotTextBoxGrowsWhenNarrowed() {
+        let font = NSFont.systemFont(ofSize: 22, weight: .medium)
+        let value = "Narrowing this annotation wraps it onto more lines without clipping the bottom."
+        let original = ScreenshotTextBoxGeometry.sizeEnsuringTextFits(
+            CGSize(width: 300, height: 44),
+            value: value,
+            font: font
+        )
+        let resized = ScreenshotTextBoxGeometry.resizedSize(
+            original,
+            using: .width,
+            translation: CGSize(width: -180, height: 0),
+            value: value,
+            font: font
+        )
+
+        XCTAssertEqual(resized.width, 120)
+        XCTAssertGreaterThan(resized.height, original.height)
+    }
+
+    func testScreenshotTextBoxFindsWidthHeightAndCornerHandles() {
+        let frame = CGRect(x: 40, y: 80, width: 200, height: 100)
+
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.handle(at: CGPoint(x: 240, y: 130), in: frame),
+            .width
+        )
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.handle(at: CGPoint(x: 140, y: 180), in: frame),
+            .height
+        )
+        XCTAssertEqual(
+            ScreenshotTextBoxGeometry.handle(at: CGPoint(x: 240, y: 180), in: frame),
+            .both
+        )
+    }
+
     func testScreenshotArrowCurveHandleTracksTheVisibleMidpoint() {
         let start = CGPoint(x: 0, y: 0)
         let end = CGPoint(x: 100, y: 0)

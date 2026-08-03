@@ -235,9 +235,9 @@ struct DeckQuickActionsView: View {
         HStack(spacing: 5) {
             labeledButton(
                 symbol: model.isCapturingScreenshot ? "hourglass" : "camera.viewfinder",
-                title: "Screenshot",
+                title: "Markup",
                 detail: model.isCapturingScreenshot ? "Capturing…" : "Capture + edit",
-                help: model.isCapturingScreenshot ? "Capturing device…" : "Capture and edit this device",
+                help: model.isCapturingScreenshot ? "Capturing device…" : "Capture and mark up this device",
                 disabled: captureControlsDisabled || model.isCapturingScreenshot,
                 action: model.captureScreenshot
             )
