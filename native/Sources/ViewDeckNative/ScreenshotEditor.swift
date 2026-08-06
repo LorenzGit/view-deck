@@ -1422,9 +1422,10 @@ private final class ScreenshotCanvasView: FlippedView, NSTextViewDelegate {
     }
 }
 
-final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelegate {
-    var onClose: ((ScreenshotEditorWindowController) -> Void)?
+final class ScreenshotEditorController: NSObject {
+    var onDone: (() -> Void)?
 
+    let contentView = FlippedView()
     private let canvas: ScreenshotCanvasView
     private let scrollView = NSScrollView()
     private let tools = NSSegmentedControl(labels: ["Select", "Draw", "Arrow", "Text"], trackingMode: .selectOne, target: nil, action: nil)
@@ -1440,43 +1441,19 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
     init(image: NSImage, suggestedName: String) {
         canvas = ScreenshotCanvasView(image: image)
         self.suggestedName = suggestedName
-        let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 1_180, height: 820),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Markup · \(suggestedName)"
-        window.titlebarAppearsTransparent = true
-        window.minSize = CGSize(width: 1_040, height: 640)
-        window.backgroundColor = DeckTheme.window
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
-        window.delegate = self
+        super.init()
         buildInterface()
         canvas.onStateChange = { [weak self] in self?.refreshControls() }
         refreshControls()
     }
 
-    required init?(coder: NSCoder) { nil }
-
-    override func showWindow(_ sender: Any?) {
-        super.showWindow(sender)
-        window?.center()
+    func prepareForDisplay() {
         DispatchQueue.main.async { [weak self] in self?.fitCanvas() }
     }
 
-    func windowWillClose(_ notification: Notification) {
-        onClose?(self)
-    }
-
     private func buildInterface() {
-        guard let window else { return }
-        let root = FlippedView()
-        root.wantsLayer = true
-        root.layer?.backgroundColor = DeckTheme.window.cgColor
-        window.contentView = root
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = DeckTheme.window.cgColor
 
         let toolbar = FlippedView()
         toolbar.wantsLayer = true
@@ -1484,7 +1461,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         toolbar.layer?.borderColor = DeckTheme.line.cgColor
         toolbar.layer?.borderWidth = 1
         toolbar.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(toolbar)
+        contentView.addSubview(toolbar)
 
         let toolbarStack = NSStackView()
         toolbarStack.orientation = .horizontal
@@ -1492,6 +1469,15 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         toolbarStack.spacing = 9
         toolbarStack.translatesAutoresizingMaskIntoConstraints = false
         toolbar.addSubview(toolbarStack)
+
+        let backButton = makeActionButton("Back", symbol: "chevron.left", accent: false, action: #selector(done))
+        toolbarStack.addArrangedSubview(backButton)
+
+        let title = NSTextField(labelWithString: "Markup · \(suggestedName)")
+        title.font = .systemFont(ofSize: 11, weight: .semibold)
+        title.textColor = DeckTheme.secondaryText
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        toolbarStack.addArrangedSubview(title)
 
         tools.selectedSegment = ScreenshotTool.draw.rawValue
         tools.target = self
@@ -1583,7 +1569,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         scrollView.maxMagnification = 3
         scrollView.documentView = canvas
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(scrollView)
+        contentView.addSubview(scrollView)
 
         let footer = FlippedView()
         footer.wantsLayer = true
@@ -1591,7 +1577,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         footer.layer?.borderColor = DeckTheme.line.cgColor
         footer.layer?.borderWidth = 1
         footer.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(footer)
+        contentView.addSubview(footer)
 
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         statusLabel.textColor = DeckTheme.muted
@@ -1606,20 +1592,20 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         footer.addSubview(exportHint)
 
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: root.topAnchor),
-            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            toolbar.topAnchor.constraint(equalTo: contentView.topAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 72),
             toolbarStack.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 15),
             toolbarStack.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -15),
             toolbarStack.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
             scrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: footer.topAnchor),
-            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            footer.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: 38),
             statusLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 14),
             statusLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
@@ -1627,6 +1613,10 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
             exportHint.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
             exportHint.leadingAnchor.constraint(greaterThanOrEqualTo: statusLabel.trailingAnchor, constant: 20)
         ])
+    }
+
+    @objc private func done() {
+        onDone?()
     }
 
     @objc private func toolChanged(_ sender: NSSegmentedControl) {
@@ -1676,7 +1666,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
             y: max(0, min(maximumOrigin.y, desiredOrigin.y))
         ))
         scrollView.reflectScrolledClipView(scrollView.contentView)
-        window?.makeFirstResponder(canvas)
+        contentView.window?.makeFirstResponder(canvas)
     }
 
     @objc private func copyImage() {
@@ -1704,7 +1694,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "\(sanitizedFilename(suggestedName)) – markup.png"
         panel.title = "Download marked-up screenshot"
-        guard let window else { return }
+        guard let window = contentView.window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             do {
@@ -1776,7 +1766,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         alert.messageText = "Export failed"
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
-        if let window { alert.beginSheetModal(for: window) }
+        if let window = contentView.window { alert.beginSheetModal(for: window) }
     }
 
     private func makeToolbarGroup(_ views: [NSView], spacing: CGFloat) -> NSView {

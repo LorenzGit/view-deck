@@ -91,7 +91,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var restoringSplitPositions = false
     private var hasRestoredSplitPositions = false
     private var sidebarMinimumWidthConstraint: NSLayoutConstraint?
-    private var screenshotEditors: [ScreenshotEditorWindowController] = []
+    private var screenshotEditor: ScreenshotEditorController?
     private var agentPromptWindowController: ViewDeckAgentPromptWindowController?
     private var standaloneVideoRecorder: LivePreviewVideoRecorder?
     private var qaRecorder: QAScenarioRecorder?
@@ -1674,16 +1674,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             self.toolbarModel.isCapturingScreenshot = false
             switch result {
             case .success(let image):
-                let editor = ScreenshotEditorWindowController(
+                let editor = ScreenshotEditorController(
                     image: image,
                     suggestedName: self.canvas.preview.profile.name
                 )
-                editor.onClose = { [weak self] closedEditor in
-                    self?.screenshotEditors.removeAll { $0 === closedEditor }
-                }
-                self.screenshotEditors.append(editor)
-                editor.showWindow(nil)
-                editor.window?.makeKeyAndOrderFront(nil)
+                editor.onDone = { [weak self] in self?.dismissScreenshotEditor() }
+                self.presentScreenshotEditor(editor)
             case .failure(let error):
                 let alert = NSAlert()
                 alert.alertStyle = .warning
@@ -1697,6 +1693,26 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 }
             }
         }
+    }
+
+    private func presentScreenshotEditor(_ editor: ScreenshotEditorController) {
+        dismissScreenshotEditor()
+        editor.contentView.translatesAutoresizingMaskIntoConstraints = false
+        guard let container = splitView.superview else { return }
+        container.addSubview(editor.contentView, positioned: .above, relativeTo: splitView)
+        NSLayoutConstraint.activate([
+            editor.contentView.topAnchor.constraint(equalTo: splitView.topAnchor),
+            editor.contentView.leadingAnchor.constraint(equalTo: splitView.leadingAnchor),
+            editor.contentView.trailingAnchor.constraint(equalTo: splitView.trailingAnchor),
+            editor.contentView.bottomAnchor.constraint(equalTo: splitView.bottomAnchor)
+        ])
+        screenshotEditor = editor
+        editor.prepareForDisplay()
+    }
+
+    private func dismissScreenshotEditor() {
+        screenshotEditor?.contentView.removeFromSuperview()
+        screenshotEditor = nil
     }
 
     private func toggleVideoRecording() {

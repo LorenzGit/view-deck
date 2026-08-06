@@ -125,7 +125,7 @@ Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-i
 
 ### Test scenarios
 
-The **Test Tools** card separates one-off capture from repeatable test scenarios. Under **Capture**, **Markup** captures the current device and opens the markup editor, while **Record video** starts a standalone 30 FPS MP4 recording that runs until you click **Stop video**.
+The **Test Tools** card separates one-off capture from repeatable test scenarios. Under **Capture**, **Markup** captures the current device and opens the markup editor in the main window; click **Back** when you are done. **Record video** starts a standalone 30 FPS MP4 recording that runs until you click **Stop video**.
 
 Under **Test scenarios**, click **Record test**, choose a `.viewdeck.json` destination, optionally enable **Include an MP4 with this test recording**, and interact with the page normally. ViewDeck first clears site-scoped WebKit data and client storage, then reloads the page before timing begins so first-run experiences, tutorials, and cache-backed state start cleanly. It records pointer down/move/up, mouse clicks and drags, keyboard down/up (including code, modifiers, location, composition, and repeat), and form changes. Every event contains both its timestamp from the start of the run and the interval since the previous event. A derived `gestures` section classifies clicks/taps, drags, swipes, direction, distance, duration, sampled points, source event IDs, and the interval since the previous gesture.
 
