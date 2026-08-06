@@ -42,6 +42,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private let inspectorScroll = NSScrollView()
     private let inspectorStack = DeckFillStackView()
     private let projectButton = DeckButton(frame: .zero)
+    private let projectHistoryPopup = NSPopUpButton()
     private let serverButton = DeckButton(frame: .zero)
     private let launchModePopup = NSPopUpButton()
     private let scriptPopup = NSPopUpButton()
@@ -817,12 +818,18 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private func buildServerInspector() {
         inspectorStack.addArrangedSubview(inspectorHeading("Local preview", subtitle: "Open an HTML file or run any project command"))
+
+        inspectorStack.addArrangedSubview(sectionLabel("HISTORY"))
+        configureProjectHistoryPopup()
+        inspectorStack.addArrangedSubview(projectHistoryPopup)
+
         projectButton.title = projectFolder == nil ? "Choose local project" : projectFolder!.lastPathComponent
         let choose = makeWideButton(projectFolder == nil ? "Choose project folder…" : projectFolder!.path, action: #selector(chooseProject))
         choose.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
         choose.imagePosition = .imageLeading
         choose.toolTip = "Choose the working folder for scripts and custom commands"
         inspectorStack.addArrangedSubview(choose)
+
         let openTerminal = makeWideButton("Open terminal at project", action: #selector(openTerminalForSelectedProject))
         openTerminal.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
         openTerminal.imagePosition = .imageLeading
@@ -2705,6 +2712,43 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         setProjectFolder(folder)
+    }
+
+    private func configureProjectHistoryPopup() {
+        let history = preferences.projectHistoryURLs
+        projectHistoryPopup.removeAllItems()
+        projectHistoryPopup.addItem(withTitle: history.isEmpty ? "No recent projects" : "Select a recent project…")
+        for folder in history {
+            projectHistoryPopup.addItem(withTitle: folder.path)
+            projectHistoryPopup.lastItem?.representedObject = folder.path
+            projectHistoryPopup.lastItem?.toolTip = folder.path
+        }
+        if let currentPath = projectFolder?.standardizedFileURL.path,
+           let selectedIndex = history.firstIndex(where: { $0.path == currentPath }) {
+            projectHistoryPopup.selectItem(at: selectedIndex + 1)
+        } else {
+            projectHistoryPopup.selectItem(at: 0)
+        }
+        projectHistoryPopup.isEnabled = !history.isEmpty
+        projectHistoryPopup.target = self
+        projectHistoryPopup.action = #selector(projectHistorySelected(_:))
+        projectHistoryPopup.toolTip = history.isEmpty
+            ? "Previously selected projects will appear here"
+            : "Switch to a recently selected project"
+        configureDeckPopup(projectHistoryPopup)
+        if projectHistoryPopup.translatesAutoresizingMaskIntoConstraints {
+            projectHistoryPopup.translatesAutoresizingMaskIntoConstraints = false
+            projectHistoryPopup.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        }
+    }
+
+    @objc private func projectHistorySelected(_ sender: NSPopUpButton) {
+        guard let path = sender.selectedItem?.representedObject as? String else { return }
+        guard preferences.projectHistoryURLs.contains(where: { $0.path == path }) else {
+            rebuildInspector()
+            return
+        }
+        setProjectFolder(URL(fileURLWithPath: path, isDirectory: true))
     }
 
     private func restoreSavedProjectFolder() {

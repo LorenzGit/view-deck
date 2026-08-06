@@ -117,4 +117,55 @@ final class ViewDeckPreferencesTests: XCTestCase {
 
         XCTAssertNil(preferences.projectFolderURL)
     }
+
+    func testOrdersProjectHistoryByMostRecentSelection() throws {
+        let folders = try makeTemporaryProjectFolders(count: 2)
+        defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        preferences.projectFolderURL = folders[0]
+        preferences.projectFolderURL = folders[1]
+        preferences.projectFolderURL = folders[0]
+
+        XCTAssertEqual(preferences.projectHistoryURLs, [folders[0], folders[1]].map(\.standardizedFileURL))
+    }
+
+    func testCapsProjectHistoryAtTenSelections() throws {
+        let folders = try makeTemporaryProjectFolders(count: 11)
+        defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        for folder in folders {
+            preferences.projectFolderURL = folder
+        }
+
+        XCTAssertEqual(preferences.projectHistoryURLs, Array(folders.reversed().prefix(10)).map(\.standardizedFileURL))
+    }
+
+    func testRemovesMissingProjectsFromHistory() throws {
+        let folders = try makeTemporaryProjectFolders(count: 2)
+        defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
+        let preferences = ViewDeckPreferences(defaults: defaults)
+        preferences.projectFolderURL = folders[0]
+        preferences.projectFolderURL = folders[1]
+
+        try FileManager.default.removeItem(at: folders[1])
+
+        XCTAssertEqual(preferences.projectHistoryURLs, [folders[0].standardizedFileURL])
+        XCTAssertEqual(
+            defaults.stringArray(forKey: "viewdeck.native.project-history"),
+            [folders[0].standardizedFileURL.path]
+        )
+    }
+
+    private func makeTemporaryProjectFolders(count: Int) throws -> [URL] {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckPreferencesTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return try (0..<count).map { index in
+            let folder = root.appendingPathComponent("project-\(index)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            return folder
+        }
+    }
 }
