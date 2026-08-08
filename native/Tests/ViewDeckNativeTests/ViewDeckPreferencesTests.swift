@@ -158,6 +158,19 @@ final class ViewDeckPreferencesTests: XCTestCase {
         )
     }
 
+    func testRemembersLastDeviceForEachProject() throws {
+        let folders = try makeTemporaryProjectFolders(count: 2)
+        defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        preferences.rememberDevice("iphone-17-pro-max", forProject: folders[0])
+        preferences.rememberDevice("ipad-pro-13", forProject: folders[1])
+        preferences.rememberDevice("macbook-pro-16", forProject: folders[0])
+
+        XCTAssertEqual(preferences.lastDeviceID(forProject: folders[0]), "macbook-pro-16")
+        XCTAssertEqual(preferences.lastDeviceID(forProject: folders[1]), "ipad-pro-13")
+    }
+
     private func makeTemporaryProjectFolders(count: Int) throws -> [URL] {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ViewDeckPreferencesTests-\(UUID().uuidString)", isDirectory: true)

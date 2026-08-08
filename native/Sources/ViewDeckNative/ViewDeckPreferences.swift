@@ -7,6 +7,7 @@ struct ViewDeckPreferences {
         static let inspectorTabLayoutVersion = "viewdeck.native.inspector-tab-layout-version"
         static let projectFolder = "viewdeck.native.project-folder"
         static let projectHistory = "viewdeck.native.project-history"
+        static let projectDeviceHistory = "viewdeck.native.project-device-history"
         static let networkShaping = "viewdeck.native.network-shaping"
     }
 
@@ -108,6 +109,17 @@ struct ViewDeckPreferences {
             defaults.set(recentPaths, forKey: Key.projectHistory)
         }
         return recentFolders
+    }
+
+    func lastDeviceID(forProject folder: URL) -> String? {
+        let devices = defaults.dictionary(forKey: Key.projectDeviceHistory) ?? [:]
+        return devices[folder.standardizedFileURL.path] as? String
+    }
+
+    func rememberDevice(_ deviceID: String, forProject folder: URL) {
+        var devices = defaults.dictionary(forKey: Key.projectDeviceHistory) ?? [:]
+        devices[folder.standardizedFileURL.path] = deviceID
+        defaults.set(devices, forKey: Key.projectDeviceHistory)
     }
 
     private func recordProjectSelection(_ folder: URL) {

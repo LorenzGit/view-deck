@@ -821,14 +821,25 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
         inspectorStack.addArrangedSubview(sectionLabel("HISTORY"))
         configureProjectHistoryPopup()
-        inspectorStack.addArrangedSubview(projectHistoryPopup)
+        let historyRow = NSStackView()
+        historyRow.orientation = .horizontal
+        historyRow.alignment = .centerY
+        historyRow.distribution = .fill
+        historyRow.spacing = 8
+        historyRow.translatesAutoresizingMaskIntoConstraints = false
+        projectHistoryPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        historyRow.addArrangedSubview(projectHistoryPopup)
+        let choose = makeIconButton(
+            "",
+            tooltip: "Choose the working folder for scripts and custom commands",
+            action: #selector(chooseProject)
+        )
+        choose.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Open project folder")
+        choose.imagePosition = .imageOnly
+        historyRow.addArrangedSubview(choose)
+        inspectorStack.addArrangedSubview(historyRow)
 
         projectButton.title = projectFolder == nil ? "Choose local project" : projectFolder!.lastPathComponent
-        let choose = makeWideButton(projectFolder == nil ? "Choose project folder…" : projectFolder!.path, action: #selector(chooseProject))
-        choose.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
-        choose.imagePosition = .imageLeading
-        choose.toolTip = "Choose the working folder for scripts and custom commands"
-        inspectorStack.addArrangedSubview(choose)
 
         let openTerminal = makeWideButton("Open terminal at project", action: #selector(openTerminalForSelectedProject))
         openTerminal.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
@@ -1461,6 +1472,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         toolbarModel.height = Int(setup.profile.viewport.height).description
         toolbarModel.dpr = setup.profile.viewport.dpr
         preferences.selectedDeviceID = setup.profile.id
+        rememberCurrentDeviceForSelectedProject()
         refreshDeviceLists()
         updateStatus()
         rebuildInspector()
@@ -2780,6 +2792,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
         projectFolder = folder
         if persist { preferences.projectFolderURL = folder }
+        if let deviceID = preferences.lastDeviceID(forProject: folder),
+           let deviceIndex = devices.firstIndex(where: { $0.id == deviceID }),
+           deviceIndex != selectedIndex {
+            selectDevice(at: deviceIndex)
+        }
         projectButton.title = folder.lastPathComponent
         projectButton.toolTip = "Project folder: \(folder.path)"
         styleButton(projectButton, fill: DeckTheme.card, border: DeckTheme.lineStrong, text: DeckTheme.secondaryText, radius: 10)
@@ -2880,8 +2897,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 folder: projectFolder,
                 launchDescription: "npm run \(script)"
             )
-            do { try server.start(folder: projectFolder, script: script) }
-            catch {
+            do {
+                try server.start(folder: projectFolder, script: script)
+                rememberCurrentDeviceForSelectedProject()
+            } catch {
                 pendingServerPreviewIdentity = nil
                 serverStatusLabel.stringValue = error.localizedDescription
                 devServerDidOutput(error.localizedDescription, isError: true)
@@ -2907,8 +2926,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 folder: projectFolder,
                 launchDescription: command
             )
-            do { try server.startCommand(folder: projectFolder, command: command) }
-            catch {
+            do {
+                try server.startCommand(folder: projectFolder, command: command)
+                rememberCurrentDeviceForSelectedProject()
+            } catch {
                 pendingServerPreviewIdentity = nil
                 serverStatusLabel.stringValue = error.localizedDescription
                 devServerDidOutput(error.localizedDescription, isError: true)
@@ -2930,6 +2951,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         serverStatusLabel.stringValue = "Previewing \(file.lastPathComponent)"
         devServerDidOutput("Loaded \(file.path)", isError: false)
         canvas.preview.loadLocalFile(file)
+        rememberCurrentDeviceForSelectedProject()
+    }
+
+    private func rememberCurrentDeviceForSelectedProject() {
+        guard let projectFolder, devices.indices.contains(selectedIndex) else { return }
+        preferences.rememberDevice(devices[selectedIndex].id, forProject: projectFolder)
     }
 
     @objc private func addCurrentDeviceToCustom() {
