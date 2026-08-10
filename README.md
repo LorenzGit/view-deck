@@ -182,7 +182,7 @@ For readiness that genuinely matters, add a `wait` event with a CSS `selector`, 
    - **Custom command** runs a command in the selected project folder.
 5. Use **Stop process** to terminate the process and its child processes. While a managed process is active, the same red stop control appears in the preview toolbar; stopping it returns the device to the empty **Native WebKit preview** screen.
 
-Use the leading-sidebar button in the preview toolbar—or press Control-Command-S—to collapse or restore the entire Device Library panel. ViewDeck remembers both its visibility and its last expanded width.
+Use the sidebar buttons in the preview toolbar to collapse or restore the Device Library and Inspector panels. You can also press Control-Command-S for the Device Library or Control-Command-I for the Inspector. ViewDeck remembers each panel's visibility and last expanded width.
 
 ViewDeck reads the exact local URL printed by tools such as Vite, including the selected port. It does not assume that a project uses port 5173.
 

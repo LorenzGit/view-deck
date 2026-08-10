@@ -91,6 +91,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var restoringSplitPositions = false
     private var hasRestoredSplitPositions = false
     private var sidebarMinimumWidthConstraint: NSLayoutConstraint?
+    private var inspectorMinimumWidthConstraint: NSLayoutConstraint?
     private var screenshotEditor: ScreenshotEditorController?
     private var agentPromptWindowController: ViewDeckAgentPromptWindowController?
     private var standaloneVideoRecorder: LivePreviewVideoRecorder?
@@ -124,6 +125,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         static let sidebarWidth = "viewdeck.native.sidebar-width"
         static let inspectorWidth = "viewdeck.native.inspector-width"
         static let sidebarCollapsed = "viewdeck.native.sidebar-collapsed"
+        static let inspectorCollapsed = "viewdeck.native.inspector-collapsed"
     }
 
     private enum LocalLaunchMode: Int, CaseIterable {
@@ -217,6 +219,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         setSidebarCollapsed(!sidebarIsCollapsed, persist: true)
     }
 
+    func toggleInspector() {
+        setInspectorCollapsed(!inspectorIsCollapsed, persist: true)
+    }
+
     private func buildInterface() {
         guard let window else { return }
         let root = FlippedView()
@@ -271,12 +277,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let sidebarMinimumWidthConstraint = sidebar.widthAnchor.constraint(
             greaterThanOrEqualToConstant: sidebarMinimumWidth
         )
+        let inspectorMinimumWidthConstraint = inspector.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: inspectorMinimumWidth
+        )
         self.sidebarMinimumWidthConstraint = sidebarMinimumWidthConstraint
+        self.inspectorMinimumWidthConstraint = inspectorMinimumWidthConstraint
         NSLayoutConstraint.activate([
             sidebarMinimumWidthConstraint,
             sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 440),
             center.widthAnchor.constraint(greaterThanOrEqualToConstant: centerMinimumWidth),
-            inspector.widthAnchor.constraint(greaterThanOrEqualToConstant: inspectorMinimumWidth),
+            inspectorMinimumWidthConstraint,
             inspector.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
             titlebar.topAnchor.constraint(equalTo: root.topAnchor),
             titlebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -391,6 +401,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
         toolbarModel.changeDPR = { [weak self] value in self?.setDPR(value) }
         toolbarModel.toggleSidebar = { [weak self] in self?.toggleSidebar() }
+        toolbarModel.toggleInspector = { [weak self] in self?.toggleInspector() }
         toolbarModel.rotate = { [weak self] in self?.rotateDevice() }
         toolbarModel.captureScreenshot = { [weak self] in self?.captureScreenshot() }
         toolbarModel.toggleVideoRecording = { [weak self] in self?.toggleVideoRecording() }
@@ -3401,13 +3412,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         guard splitView.bounds.width > sidebarMinimumWidth + inspectorMinimumWidth + centerMinimumWidth else { return }
 
         let defaults = UserDefaults.standard
-        let savedInspector = defaults.object(forKey: SplitPreferenceKey.inspectorWidth) as? NSNumber
-        let inspectorWidth = min(640, max(inspectorMinimumWidth, CGFloat(savedInspector?.doubleValue ?? Double(inspectorInitialWidth))))
 
         restoringSplitPositions = true
         splitView.setPosition(preferredSidebarWidth, ofDividerAt: 0)
-        splitView.setPosition(splitView.bounds.width - inspectorWidth - splitView.dividerThickness, ofDividerAt: 1)
+        splitView.setPosition(splitView.bounds.width - preferredInspectorWidth - splitView.dividerThickness, ofDividerAt: 1)
         setSidebarCollapsed(defaults.bool(forKey: SplitPreferenceKey.sidebarCollapsed), persist: false)
+        setInspectorCollapsed(defaults.bool(forKey: SplitPreferenceKey.inspectorCollapsed), persist: false)
         restoringSplitPositions = false
     }
 
@@ -3418,6 +3428,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private var sidebarIsCollapsed: Bool {
         !splitView.arrangedSubviews.contains { $0 === sidebar }
+    }
+
+    private var inspectorIsCollapsed: Bool {
+        !splitView.arrangedSubviews.contains { $0 === inspector }
     }
 
     private func setSidebarCollapsed(_ collapsed: Bool, persist: Bool) {
@@ -3451,6 +3465,46 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         }
     }
 
+    private var preferredInspectorWidth: CGFloat {
+        let savedWidth = UserDefaults.standard.object(forKey: SplitPreferenceKey.inspectorWidth) as? NSNumber
+        return min(640, max(inspectorMinimumWidth, CGFloat(savedWidth?.doubleValue ?? Double(inspectorInitialWidth))))
+    }
+
+    private func setInspectorCollapsed(_ collapsed: Bool, persist: Bool) {
+        guard collapsed != inspectorIsCollapsed else {
+            toolbarModel.isInspectorCollapsed = collapsed
+            if persist {
+                UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.inspectorCollapsed)
+            }
+            return
+        }
+
+        if collapsed {
+            if inspector.frame.width >= inspectorMinimumWidth {
+                UserDefaults.standard.set(Double(inspector.frame.width), forKey: SplitPreferenceKey.inspectorWidth)
+            }
+            inspectorMinimumWidthConstraint?.isActive = false
+            inspector.isHidden = true
+            splitView.removeArrangedSubview(inspector)
+            splitView.adjustSubviews()
+        } else {
+            inspector.isHidden = false
+            splitView.addArrangedSubview(inspector)
+            inspectorMinimumWidthConstraint?.isActive = true
+            splitView.adjustSubviews()
+            let dividerIndex = splitView.arrangedSubviews.count - 2
+            splitView.setPosition(
+                splitView.bounds.width - preferredInspectorWidth - splitView.dividerThickness,
+                ofDividerAt: dividerIndex
+            )
+        }
+
+        toolbarModel.isInspectorCollapsed = collapsed
+        if persist {
+            UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.inspectorCollapsed)
+        }
+    }
+
     func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
         false
     }
@@ -3464,14 +3518,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         constrainMinCoordinate proposedMinimumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        if !sidebarIsCollapsed, dividerIndex == 0 {
+        let leadingSubview = splitView.arrangedSubviews[dividerIndex]
+        let trailingSubview = splitView.arrangedSubviews[dividerIndex + 1]
+        if leadingSubview === sidebar {
             return max(sidebarMinimumWidth, proposedMinimumPosition)
         }
-        let centerLeadingEdge = sidebarIsCollapsed
-            ? splitView.bounds.minX
-            : sidebar.frame.maxX + splitView.dividerThickness
-        let minimumCenterEdge = centerLeadingEdge + centerMinimumWidth
-        return max(minimumCenterEdge, proposedMinimumPosition)
+        if leadingSubview === center, trailingSubview === inspector {
+            let minimumCenterEdge = center.frame.minX + centerMinimumWidth
+            return max(minimumCenterEdge, proposedMinimumPosition)
+        }
+        return proposedMinimumPosition
     }
 
     func splitView(
@@ -3479,25 +3535,33 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         constrainMaxCoordinate proposedMaximumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        let inspectorDividerIndex = sidebarIsCollapsed ? 0 : 1
-        if dividerIndex == inspectorDividerIndex {
+        let leadingSubview = splitView.arrangedSubviews[dividerIndex]
+        let trailingSubview = splitView.arrangedSubviews[dividerIndex + 1]
+        if trailingSubview === inspector {
             return min(splitView.bounds.width - inspectorMinimumWidth - splitView.dividerThickness, proposedMaximumPosition)
         }
-        let maximumSidebarEdge = inspector.frame.minX - splitView.dividerThickness - centerMinimumWidth
-        return min(maximumSidebarEdge, proposedMaximumPosition)
+        if leadingSubview === sidebar, trailingSubview === center {
+            let maximumSidebarEdge = center.frame.maxX - centerMinimumWidth
+            return min(maximumSidebarEdge, proposedMaximumPosition)
+        }
+        return proposedMaximumPosition
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         let collapsed = sidebarIsCollapsed
         toolbarModel.isSidebarCollapsed = collapsed
+        let inspectorCollapsed = inspectorIsCollapsed
+        toolbarModel.isInspectorCollapsed = inspectorCollapsed
         guard hasRestoredSplitPositions, !restoringSplitPositions else { return }
 
         UserDefaults.standard.set(collapsed, forKey: SplitPreferenceKey.sidebarCollapsed)
-        guard !collapsed,
-              sidebar.frame.width >= sidebarMinimumWidth,
-              inspector.frame.width >= inspectorMinimumWidth else { return }
-        UserDefaults.standard.set(Double(sidebar.frame.width), forKey: SplitPreferenceKey.sidebarWidth)
-        UserDefaults.standard.set(Double(inspector.frame.width), forKey: SplitPreferenceKey.inspectorWidth)
+        UserDefaults.standard.set(inspectorCollapsed, forKey: SplitPreferenceKey.inspectorCollapsed)
+        if !collapsed, sidebar.frame.width >= sidebarMinimumWidth {
+            UserDefaults.standard.set(Double(sidebar.frame.width), forKey: SplitPreferenceKey.sidebarWidth)
+        }
+        if !inspectorCollapsed, inspector.frame.width >= inspectorMinimumWidth {
+            UserDefaults.standard.set(Double(inspector.frame.width), forKey: SplitPreferenceKey.inspectorWidth)
+        }
     }
 
     private func styleButton(_ button: NSButton, fill: NSColor, border: NSColor, text: NSColor, radius: CGFloat) {

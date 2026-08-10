@@ -24,11 +24,13 @@ final class DeckToolbarModel: ObservableObject {
     @Published var videoCaptureState = DeckVideoCaptureState.idle
     @Published var qaCheckpointCount = 0
     @Published var isSidebarCollapsed = false
+    @Published var isInspectorCollapsed = false
     @Published var localProcessState = DeckLocalProcessState.idle
 
     var commitViewport: (Double, Double) -> Void = { _, _ in }
     var changeDPR: (Double) -> Void = { _ in }
     var toggleSidebar: () -> Void = {}
+    var toggleInspector: () -> Void = {}
     var rotate: () -> Void = {}
     var captureScreenshot: () -> Void = {}
     var toggleVideoRecording: () -> Void = {}
@@ -105,6 +107,14 @@ struct DeckToolbarView: View {
             .padding(.horizontal, 11)
             .frame(height: 32)
             .background(ToolbarPalette.field, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
+
+            browserIcon(
+                "sidebar.right",
+                help: model.isInspectorCollapsed ? "Show inspector" : "Hide inspector",
+                action: model.toggleInspector
+            )
+            .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
         }
         .padding(.horizontal, 12)

@@ -75,6 +75,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleSidebarItem.keyEquivalentModifierMask = [.command, .control]
         toggleSidebarItem.target = self
         viewMenu.addItem(toggleSidebarItem)
+        let toggleInspectorItem = NSMenuItem(
+            title: "Toggle Inspector",
+            action: #selector(toggleInspector(_:)),
+            keyEquivalent: "i"
+        )
+        toggleInspectorItem.keyEquivalentModifierMask = [.command, .control]
+        toggleInspectorItem.target = self
+        viewMenu.addItem(toggleInspectorItem)
 
         let windowItem = NSMenuItem()
         menu.addItem(windowItem)
@@ -89,5 +97,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleSidebar(_ sender: Any?) {
         mainWindowController?.toggleSidebar()
+    }
+
+    @objc private func toggleInspector(_ sender: Any?) {
+        mainWindowController?.toggleInspector()
     }
 }
