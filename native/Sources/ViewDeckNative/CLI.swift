@@ -218,6 +218,7 @@ public enum ViewDeckCommand {
             showSafeArea: invocation.showSafeArea,
             applySafeAreaToPage: invocation.applySafeArea,
             networkShapingConfiguration: invocation.networkShapingConfiguration,
+            nativeHTTPConfiguration: invocation.nativeHTTPConfiguration,
             header: header,
             footer: footer,
             left: left,
@@ -539,6 +540,16 @@ public enum ViewDeckCommand {
                 "localHTTPTCPBridge",
                 "resourceActivity"
             ],
+            "nativeHttp": [
+                "enabledByDefault": false,
+                "api": "window.viewdeck.nativeHttp.request",
+                "transport": "URLSession",
+                "hostPolicy": "exactExplicitAllowlist",
+                "redirectPolicy": "allowlistedHostsOnly",
+                "responseTypes": ["text", "json", "binary", "base64"],
+                "scenarioPersistence": true,
+                "reporting": "redactedHostAndStatusOnly"
+            ],
             "artifacts": ["png", "mp4", "json"],
             "preview": [
                 "defaultVisibility": "hidden",
@@ -558,7 +569,8 @@ public enum ViewDeckCommand {
                 "configuration": [
                     "deviceProfile", "orientation", "CSSResolution", "physicalResolution",
                     "DPR", "safeArea", "SafariChrome", "header", "footer",
-                    "landscapeLeftRail", "landscapeRightRail", "networkShaping", "source"
+                    "landscapeLeftRail", "landscapeRightRail", "networkShaping",
+                    "nativeHttp", "source"
                 ]
             ],
             "captureScales": ["0.5...3", "deviceDPR"],
@@ -643,6 +655,8 @@ struct CLIInvocation {
     var audioMode: AudioMode = .normal
     var networkShapingConfiguration = NetworkShapingConfiguration.disabled
     var hasNetworkShapingOverride = false
+    var nativeHTTPConfiguration = NativeHTTPConfiguration.disabled
+    var hasNativeHTTPOverride = false
     var scenarioInput: URL?
     var scenarioOutput: URL?
     var scenarioName: String?
@@ -837,6 +851,20 @@ struct CLIInvocation {
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.seed = seed
                 value.hasNetworkShapingOverride = true
+            case "--native-http":
+                value.nativeHTTPConfiguration.enabled = true
+                value.hasNativeHTTPOverride = true
+            case "--native-http-allow-host":
+                let rawHost = try requiredValue(for: argument)
+                guard let host = NativeHTTPConfiguration.normalizedHost(rawHost) else {
+                    throw CLIError.invalidArgument(
+                        "--native-http-allow-host requires a hostname without a scheme, port, path, or credentials."
+                    )
+                }
+                if !value.nativeHTTPConfiguration.allowedHosts.contains(host) {
+                    value.nativeHTTPConfiguration.allowedHosts.append(host)
+                }
+                value.hasNativeHTTPOverride = true
             case "--speed":
                 let speed = try requiredValue(for: argument)
                 if speed == "smart" {
@@ -972,6 +1000,23 @@ struct CLIInvocation {
             throw CLIError.invalidArgument("\(flag) must be between 0.5 and 3.")
         }
         return result
+    }
+}
+
+enum CLIReplayConfiguration {
+    static func effective(
+        scenario: QAScenario,
+        invocation: CLIInvocation
+    ) -> QADeviceConfiguration {
+        var configuration = scenario.configuration
+        if invocation.hasNetworkShapingOverride {
+            configuration.network = invocation.networkShapingConfiguration
+        }
+        if invocation.hasNativeHTTPOverride {
+            configuration.nativeHTTP = invocation.nativeHTTPConfiguration
+        }
+        configuration.nativeHTTP = (configuration.nativeHTTP ?? .disabled).normalized
+        return configuration
     }
 }
 
@@ -1115,7 +1160,8 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
     private func preparePreview() throws {
         preview = DevicePreviewView(
             profile: device,
-            networkShapingConfiguration: invocation.networkShapingConfiguration
+            networkShapingConfiguration: invocation.networkShapingConfiguration,
+            nativeHTTPConfiguration: invocation.nativeHTTPConfiguration
         )
         if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
@@ -1418,6 +1464,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
                 "safariChrome": device.safariChrome
             ],
             "network": networkReport,
+            "nativeHttp": preview.nativeHTTPReport(),
             "audit": audit,
             "serverLog": serverLog,
             "artifacts": artifacts,
@@ -1549,14 +1596,15 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
     }
 
     private func preparePreview() throws {
-        var configuration = scenario.configuration
-        if invocation.hasNetworkShapingOverride {
-            configuration.network = invocation.networkShapingConfiguration
-        }
+        let configuration = CLIReplayConfiguration.effective(
+            scenario: scenario,
+            invocation: invocation
+        )
         effectiveConfiguration = configuration
         preview = DevicePreviewView(
             profile: configuration.profile,
-            networkShapingConfiguration: configuration.network ?? .disabled
+            networkShapingConfiguration: configuration.network ?? .disabled,
+            nativeHTTPConfiguration: configuration.nativeHTTP ?? .disabled
         )
         if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
@@ -1858,6 +1906,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             ],
             "configuration": configurationObject,
             "network": networkReport,
+            "nativeHttp": preview.nativeHTTPReport(),
             "playback": [
                 "speed": playbackSpeedValue,
                 "recordedDurationMilliseconds": scenario.timing.durationMilliseconds,
@@ -2258,6 +2307,11 @@ private enum CLIHelp {
       --network-offline              Block connections through the preview transport
       --network-seed <integer>       Deterministic jitter seed (default: 42)
 
+    NATIVE HTTP
+      --native-http                  Enable the URLSession JavaScript bridge
+      --native-http-allow-host <host>
+                                     Allow one exact hostname; repeat as needed
+
     READINESS
       --wait-for <selector>          Wait for a CSS selector
       --wait-js <expression>         Wait until a JavaScript expression is truthy
@@ -2287,6 +2341,7 @@ private enum CLIHelp {
       --output <scenario.json>       Write a valid AI-authoring scenario skeleton
       --name <name>                  Override the scenario name
       --device, layout, and source options are shared with capture
+      --native-http settings are embedded in the scenario configuration
 
     OUTPUT AND POLICY
       --json                         Print the report as JSON
@@ -2299,8 +2354,9 @@ private enum CLIHelp {
       viewdeck inspect --project . --npm-script dev --wait-for canvas --json
       viewdeck inspect --project . --audio verify-silent --report audio.json --json
       viewdeck inspect https://example.com --network-rtt-ms 400 --network-down-kbps 1500 --json
+      viewdeck inspect http://localhost:5173 --native-http --native-http-allow-host api.example.com --json
       viewdeck record --project . --npm-script dev --wait-for canvas --duration 6 --fps 12 --output game.mp4 --screenshot game.png --report game.json
-      viewdeck qa template http://localhost:5173 --device iphone-17-pro-max --output gameplay.viewdeck.json
+      viewdeck qa template http://localhost:5173 --device iphone-17-pro-max --native-http --native-http-allow-host api.example.com --output gameplay.viewdeck.json
       viewdeck qa replay gameplay.viewdeck.json --speed smart --artifacts qa-results --video replay.mp4 --report replay.json
     """
 }

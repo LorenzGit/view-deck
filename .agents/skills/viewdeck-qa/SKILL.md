@@ -313,6 +313,62 @@ cannot use the bridge because changing its origin would invalidate the
 certificate; do not claim it was shaped unless the report counters prove that
 its traffic traversed the SOCKSv5 proxy.
 
+## Use the native HTTP bridge
+
+Use native HTTP only when the tested page must call an HTTP(S) endpoint without
+browser CORS enforcement. It is disabled by default. Pass `--native-http` and
+one repeatable `--native-http-allow-host <hostname>` for every exact destination
+host to direct `capture`, `inspect`, and `record` commands:
+
+```bash
+dist/native/viewdeck inspect http://localhost:5173 \
+  --native-http \
+  --native-http-allow-host api.example.com \
+  --audio verify-silent \
+  --report /tmp/viewdeck-qa.example/native-http.json \
+  --json
+```
+
+For an interactive app run, the same opt-in controls are visible in the
+**Network** inspector as **Enable native HTTP bridge** and **Allowed hosts**.
+Recordings capture that effective configuration; replay restores the scenario
+configuration deterministically.
+
+Do not put schemes, ports, paths, credentials, or wildcards in allow-host
+values. The bridge uses normal `URLSession` TLS verification, checks initial
+and redirect hosts before network access, and keeps cookies, caches, and native
+credentials ephemeral. Never use it as a substitute for disabling WebKit
+security. Native bridge traffic is separate from the WKWebView network-shaping
+transport; do not attribute the proxy's traffic counters or timing to it.
+
+Page code calls:
+
+```js
+const response = await window.viewdeck.nativeHttp.request({
+  url: "https://api.example.com/v1/state",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ checkpoint: 3 }),
+  responseType: "json",
+});
+```
+
+`responseType` supports `text`, `json`, `binary`/`arraybuffer`, and `base64`.
+An `AbortSignal` can be passed as `signal`. When native HTTP is disabled, the
+same Promise API exists but rejects before network access.
+
+Pass the flags to `qa template` to persist `.configuration.nativeHTTP`. A
+normal `qa replay` restores that configuration before the clean-site load.
+Replay-time native HTTP flags are temporary overrides and do not rewrite the
+scenario. Confirm the template and replay report contain the expected enabled
+state and exact allowlist.
+
+Require the report's top-level `nativeHttp` object to contain the enabled state,
+allowlisted hosts, request/success/failure counts, and only requested host,
+status, and outcome per request. Fail the run if native HTTP reporting exposes
+a request or response body, complete request URL, query value, Authorization or
+Cookie header, token, credential, or signing key.
+
 ## Author a scenario
 
 Generate the scenario before adding inputs. Never invent or copy the device
@@ -334,7 +390,8 @@ dist/native/viewdeck qa template \
 The generated file contains the exact source, device, orientation, resolution,
 DPR, safe area, Safari, network shaping, header, footer, and side-layer
 configuration. Confirm `.configuration.orientation`,
-`.configuration.resolution`, and `.configuration.network` before adding events.
+`.configuration.resolution`, `.configuration.network`, and
+`.configuration.nativeHTTP` before adding events.
 Read
 `authoring.eventExamples` from that file and adapt those current examples into
 the top-level `events` array:
@@ -429,6 +486,8 @@ alone. Check:
 - `network`, including the effective conditions, proxy implementation,
   `trafficObserved`, connection and byte counts, and every
   `activity.resources[]` lifecycle
+- `nativeHttp`, including its enabled state, exact allowlist, counts, redacted
+  host/status/outcome entries, and absence of sensitive values
 - `audit.consoleMessages` and `audit.issues`
 - `audio.muteApplied`, `audio.everActive`, and every `audio.activeIntervals[]`
 - `audit.audio.mediaElements`, media errors/events, and Web Audio source starts
@@ -459,9 +518,10 @@ Return:
 1. The tested source, device, orientation, Safari/header/footer state, and
    preview visibility.
 2. The effective network conditions and the proxy's TCP/HTTP3 scope.
-3. The scenario and report paths.
-4. Every screenshot, checkpoint folder, and video path.
-5. Original and effective replay duration when smart timing was used.
-6. Concise failures or warnings with the responsible event/checkpoint.
+3. Native HTTP state, allowlisted hosts, and redacted request counts when used.
+4. The scenario and report paths.
+5. Every screenshot, checkpoint folder, and video path.
+6. Original and effective replay duration when smart timing was used.
+7. Concise failures or warnings with the responsible event/checkpoint.
 
 Keep all temporary artifacts until the user has received their paths.

@@ -179,6 +179,7 @@ struct QADeviceConfiguration: Codable, Equatable {
     var safeArea: QASafeAreaConfiguration
     var safari: QASafariConfiguration
     var network: NetworkShapingConfiguration? = nil
+    var nativeHTTP: NativeHTTPConfiguration? = nil
     var header: QALayerConfiguration
     var footer: QALayerConfiguration
     var left: QALayerConfiguration? = nil
@@ -600,7 +601,9 @@ final class QAScenarioRecorder {
         group.enter()
         preview.captureAudit { [weak self] result in
             if case .success(let value) = result {
-                self?.auditAtEnd = QAJSONValue(any: value)
+                var report = value
+                report["nativeHttp"] = preview.nativeHTTPReport()
+                self?.auditAtEnd = QAJSONValue(any: report)
             }
             group.leave()
         }
@@ -1176,6 +1179,7 @@ extension QADeviceConfiguration {
         showSafeArea: Bool,
         applySafeAreaToPage: Bool,
         networkShapingConfiguration: NetworkShapingConfiguration = .disabled,
+        nativeHTTPConfiguration: NativeHTTPConfiguration = .disabled,
         header: QALayerConfiguration,
         footer: QALayerConfiguration,
         left: QALayerConfiguration? = nil,
@@ -1266,6 +1270,7 @@ extension QADeviceConfiguration {
                 bottomChromeCSSPixels: bottomChrome
             ),
             network: networkShapingConfiguration.normalized,
+            nativeHTTP: nativeHTTPConfiguration.normalized,
             header: header,
             footer: footer,
             left: left,
@@ -1347,6 +1352,7 @@ extension QADeviceConfiguration {
                 bottomChromeCSSPixels: bottomChrome
             ),
             network: preview.networkShapingConfiguration,
+            nativeHTTP: preview.nativeHTTPConfiguration,
             header: header,
             footer: footer,
             left: left,

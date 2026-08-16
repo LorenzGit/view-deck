@@ -96,6 +96,25 @@ final class ViewDeckPreferencesTests: XCTestCase {
         )
     }
 
+    func testNativeHTTPIsDisabledByDefaultAndPersistsExplicitConfiguration() {
+        let preferences = ViewDeckPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.nativeHTTPConfiguration, .disabled)
+
+        let configuration = NativeHTTPConfiguration(
+            enabled: true,
+            allowedHosts: ["API.EXAMPLE.COM", "assets.example.com"]
+        )
+        preferences.nativeHTTPConfiguration = configuration
+
+        XCTAssertEqual(
+            ViewDeckPreferences(defaults: defaults).nativeHTTPConfiguration,
+            NativeHTTPConfiguration(
+                enabled: true,
+                allowedHosts: ["api.example.com", "assets.example.com"]
+            )
+        )
+    }
+
     func testRestoresExistingProjectDirectory() throws {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("ViewDeckPreferencesTests-\(UUID().uuidString)", isDirectory: true)

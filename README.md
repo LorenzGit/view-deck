@@ -22,6 +22,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Automatic localhost URL detection, port-conflict rerouting, in-app process output, and stop controls.
 - Live localhost port inventory with process, command, working-directory, collision, open, and stop controls.
 - Deterministic per-preview network shaping for round-trip latency, jitter, upload/download bandwidth, and offline behavior.
+- Opt-in native HTTP requests through `URLSession`, limited to an explicit hostname allowlist.
 - Resizable side panels and a compact, responsive workspace.
 - One-click screen-only device screenshots with editable, resizable text boxes that keep wrapped text visible, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
 - A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
@@ -121,6 +122,62 @@ dist/native/viewdeck inspect https://example.com \
 
 Any network option enables shaping. Use `--network-enable` for the defaults, `--network-offline` to block connections, and a bandwidth value of `0` for unlimited throughput. ViewDeck routes remote TCP traffic through a loopback SOCKSv5 proxy and local HTTP traffic through a loopback TCP bridge, splits RTT across both directions, and uses the seed to make jitter repeatable. Reports identify the effective transport, whether shaped traffic was actually observed, connection and byte counters, and `network.activity.resources` with each document, script, style, image, font, media, and fetch/XHR lifecycle. Increase `--timeout` when deliberately testing long delays or low bandwidth.
 
+### Native HTTP bridge
+
+The native bridge is disabled by default. Enable it for `capture`, `inspect`,
+`record`, or `qa template`, and allow each exact destination hostname:
+
+```bash
+dist/native/viewdeck inspect http://localhost:5173 \
+  --native-http \
+  --native-http-allow-host api.example.com \
+  --native-http-allow-host assets.example.com \
+  --report /tmp/native-http.json \
+  --json
+```
+
+In the ViewDeck app, open the **Network** inspector, turn on **Enable native
+HTTP bridge**, and enter the comma- or space-separated exact hostnames in
+**Allowed hosts**. The app remembers this opt-in configuration and reloads the
+current page when it changes. QA recordings embed it in the scenario, and QA
+replay restores the recorded value.
+
+`--native-http-allow-host` is repeatable and accepts only a hostname: no scheme,
+port, path, credentials, or wildcard. Allowlisting does not enable the bridge by
+itself. Initial requests and every redirect are checked before network access;
+HTTP and HTTPS use normal `URLSession` security, including system TLS
+verification. ViewDeck does not change WebKit security settings or page CORS.
+
+Page JavaScript can use the Promise API:
+
+```js
+const response = await window.viewdeck.nativeHttp.request({
+  url: "https://api.example.com/v1/state",
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: "Bearer …",
+  },
+  body: JSON.stringify({ checkpoint: 3 }),
+  responseType: "json",
+});
+
+console.log(response.status, response.headers, response.data);
+```
+
+`responseType` may be `text`, `json`, `binary`/`arraybuffer`, or `base64`;
+binary data is returned as an `ArrayBuffer`. String bodies are sent as exact
+UTF-8 bytes. Pass an `AbortSignal` as `signal`, and optionally
+`timeoutMilliseconds`, to cancel or shorten the default 30-second request
+timeout. The bridge uses an ephemeral session without cookie, cache, or
+credential persistence and replaces that session for each clean-site run.
+
+Reports contain only bridge state, allowlisted hosts, counts, and each requested
+host/status/outcome. They never include request or response bodies, headers,
+cookies, authorization values, tokens, signing keys, or request URLs. See
+[`examples/native_http.html`](examples/native_http.html) for a complete page
+example.
+
 Use `--json` for machine-readable stdout, `--fail-on-page-error` or `--fail-on-issues` for CI policies, and `viewdeck help` for the complete option list. JSON mode keeps ViewDeck's own result on stdout and writes development-server output to stderr.
 
 ### Test scenarios
@@ -135,7 +192,7 @@ While recording, **Replay test** becomes **Add checkpoint**. Click it to save a 
 - A complete MP4 when **Include an MP4 with this test recording** was selected.
 - A timestamped PNG for every checkpoint.
 
-The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, network-shaping configuration, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
+The scenario embeds the exact device profile and custom geometry, portrait and oriented viewport sizes, CSS and physical-pixel resolutions, DPR, shell and sensor geometry, configured/oriented/page safe areas, safe-area guide and layout mode, Safari simulation and chrome dimensions, user agent, home indicator, network-shaping and native-HTTP configuration, and enabled header/footer/side-layer metadata and HTML. It also records the URL/project launch configuration and detailed browser, navigator, screen, visual viewport, document, graphics, preference, storage-key, locale, and timing snapshots.
 
 Click **Replay test** to choose a scenario, timing speed, and whether to capture replay artifacts. During playback the control becomes **Stop replay**; stopping cancels all pending inputs, finishes the partial video, and writes a cancelled replay report. ViewDeck restores the recorded configuration, clears the recorded site's cache, cookies, local/session storage, Cache API entries, service workers, and IndexedDB, and only then loads the source and begins playback. Coordinates are stored both absolutely and normalized, which makes canvas interactions suitable for PixiJS and Three.js while DOM selector hints improve React and HTML replay.
 
@@ -148,11 +205,13 @@ The repository includes a reusable [`viewdeck-qa`](.agents/skills/viewdeck-qa/SK
 ```bash
 dist/native/viewdeck qa template http://localhost:5173 \
   --device iphone-17-pro-max \
+  --native-http \
+  --native-http-allow-host api.example.com \
   --name "keyboard smoke test" \
   --output /tmp/gameplay.viewdeck.json
 ```
 
-The generated JSON includes the selected device, resolution, DPR, safe areas, Safari state, page-layer state, source configuration, authoring rules, and copyable pointer, keyboard, selector-wait, JavaScript-wait, and fixed-delay examples. Its top-level `events` array is intentionally empty for an agent to populate.
+The generated JSON includes the selected device, resolution, DPR, safe areas, Safari state, page-layer state, native-HTTP allowlist, source configuration, authoring rules, and copyable pointer, keyboard, selector-wait, JavaScript-wait, and fixed-delay examples. Its top-level `events` array is intentionally empty for an agent to populate. Replay restores `.configuration.nativeHTTP`; explicit native-HTTP flags on `qa replay` are temporary overrides and do not rewrite the scenario.
 
 The same replay is available to scripts and AI agents. `--speed smart` preserves short gaps, pointer/mouse down-to-up gestures, and keyboard holds while capping long idle gaps at 250ms:
 
@@ -256,6 +315,10 @@ The application lives in `native/Sources/ViewDeckNative/`. Tests and local-serve
 ## Security and privacy
 
 ViewDeck does not add analytics or upload project files. The sites you load and the commands you run may have their own network behavior.
+
+Enabling native HTTP grants the loaded primary page access to every explicitly
+allowlisted hostname without browser CORS enforcement. Treat the allowlist as a
+security boundary, keep it narrow, and never enable it for untrusted pages.
 
 Custom commands, npm scripts, and imported HTML can execute code with your user permissions. Only use content you trust. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

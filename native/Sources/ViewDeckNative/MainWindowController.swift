@@ -173,7 +173,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         selectedIndex = initialDevices.firstIndex(where: { $0.id == selectedID }) ?? 0
         let canvas = PreviewCanvasView(
             profile: initialDevices[selectedIndex],
-            networkShapingConfiguration: preferences.networkShapingConfiguration
+            networkShapingConfiguration: preferences.networkShapingConfiguration,
+            nativeHTTPConfiguration: preferences.nativeHTTPConfiguration
         )
         self.canvas = canvas
 
@@ -647,9 +648,38 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private func buildNetworkInspector() {
         let configuration = canvas.preview.networkShapingConfiguration
         inspectorStack.addArrangedSubview(inspectorHeading(
-            "Network shaping",
-            subtitle: "Deterministic TCP conditions for the primary page"
+            "Network controls",
+            subtitle: "Native requests and deterministic TCP conditions"
         ))
+
+        let nativeHTTPConfiguration = canvas.preview.nativeHTTPConfiguration
+        let nativeHTTPEnabled = DeckCheckboxButton(
+            title: "Enable native HTTP bridge",
+            target: self,
+            action: #selector(nativeHTTPEnabledChanged(_:))
+        )
+        nativeHTTPEnabled.state = nativeHTTPConfiguration.enabled ? .on : .off
+        nativeHTTPEnabled.toolTip = "Allow page JavaScript to make URLSession requests to explicitly allowed hosts"
+        let allowedHosts = inspectorTextField(
+            nativeHTTPConfiguration.allowedHosts.joined(separator: ", "),
+            action: #selector(nativeHTTPAllowedHostsChanged(_:))
+        )
+        allowedHosts.placeholderString = "api.example.com"
+        allowedHosts.toolTip = "Comma- or space-separated exact hostnames; wildcards, schemes, paths, and ports are rejected"
+        let nativeHTTPReport = canvas.preview.nativeHTTPReport()
+        let requestCount = nativeHTTPReport["requestCount"] as? Int ?? 0
+        let successCount = nativeHTTPReport["successCount"] as? Int ?? 0
+        let failureCount = nativeHTTPReport["failureCount"] as? Int ?? 0
+        inspectorStack.addArrangedSubview(sectionLabel("NATIVE HTTP BRIDGE"))
+        inspectorStack.addArrangedSubview(inspectorCard([
+            nativeHTTPEnabled,
+            formRow("Allowed hosts", field: allowedHosts),
+            cardDivider(),
+            infoRow("Requests", value: "\(requestCount) · \(successCount) succeeded · \(failureCount) failed"),
+            helpText("Disabled by default. Only exact allowed hosts and allowlisted redirects can use the Promise-based URLSession bridge; normal page fetch remains subject to CORS.")
+        ]))
+
+        inspectorStack.addArrangedSubview(sectionLabel("NETWORK SHAPING"))
 
         let enabled = DeckCheckboxButton(
             title: "Enable network shaping",
@@ -2015,6 +2045,10 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             configuration.network ?? .disabled,
             reloadIfNeeded: false
         )
+        canvas.preview.applyNativeHTTPConfiguration(
+            configuration.nativeHTTP ?? .disabled,
+            reloadIfNeeded: false
+        )
 
         let header = configuration.header
         sampleHeaderEnabled = header.identifier == "builtin-sample-header"
@@ -2276,6 +2310,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                 "finishedAt": ISO8601DateFormatter().string(from: Date())
             ],
             "errors": replayErrors,
+            "nativeHttp": canvas.preview.nativeHTTPReport(),
             "artifacts": replayArtifacts
         ]
         do {
@@ -2321,10 +2356,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func presentError(title: String, error: Error) {
+        presentError(title: title, message: error.localizedDescription)
+    }
+
+    private func presentError(title: String, message: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
-        alert.informativeText = error.localizedDescription
+        alert.informativeText = message
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -2351,6 +2390,44 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func showSafeAreaChanged(_ sender: NSButton) { canvas.preview.showSafeArea = sender.state == .on }
     @objc private func applySafeAreaChanged(_ sender: NSButton) { canvas.preview.applySafeAreaToPage = sender.state == .on }
+
+    @objc private func nativeHTTPEnabledChanged(_ sender: NSButton) {
+        var configuration = canvas.preview.nativeHTTPConfiguration
+        configuration.enabled = sender.state == .on
+        applyNativeHTTPConfiguration(configuration)
+    }
+
+    @objc private func nativeHTTPAllowedHostsChanged(_ sender: NSTextField) {
+        let values = sender.stringValue.split { character in
+            character == "," || character.isWhitespace
+        }.map(String.init)
+        var hosts: [String] = []
+        var seen = Set<String>()
+        for value in values {
+            guard let host = NativeHTTPConfiguration.normalizedHost(value) else {
+                sender.stringValue = canvas.preview.nativeHTTPConfiguration.allowedHosts.joined(separator: ", ")
+                presentError(
+                    title: "Invalid native HTTP host",
+                    message: "Use exact hostnames only, without schemes, ports, paths, credentials, or wildcards."
+                )
+                return
+            }
+            if seen.insert(host).inserted { hosts.append(host) }
+        }
+        var configuration = canvas.preview.nativeHTTPConfiguration
+        configuration.allowedHosts = hosts
+        applyNativeHTTPConfiguration(configuration)
+    }
+
+    private func applyNativeHTTPConfiguration(
+        _ configuration: NativeHTTPConfiguration,
+        reloadIfNeeded: Bool = true
+    ) {
+        let normalized = configuration.normalized
+        canvas.preview.applyNativeHTTPConfiguration(normalized, reloadIfNeeded: reloadIfNeeded)
+        preferences.nativeHTTPConfiguration = normalized
+        rebuildInspector()
+    }
 
     @objc private func networkShapingEnabledChanged(_ sender: NSButton) {
         var configuration = canvas.preview.networkShapingConfiguration

@@ -9,6 +9,7 @@ struct ViewDeckPreferences {
         static let projectHistory = "viewdeck.native.project-history"
         static let projectDeviceHistory = "viewdeck.native.project-device-history"
         static let networkShaping = "viewdeck.native.network-shaping"
+        static let nativeHTTP = "viewdeck.native.native-http"
     }
 
     private static let currentInspectorTabLayoutVersion = 3
@@ -53,6 +54,25 @@ struct ViewDeckPreferences {
             let configuration = newValue.normalized
             if let data = try? JSONEncoder().encode(configuration) {
                 defaults.set(data, forKey: Key.networkShaping)
+            }
+        }
+    }
+
+    var nativeHTTPConfiguration: NativeHTTPConfiguration {
+        get {
+            guard let data = defaults.data(forKey: Key.nativeHTTP),
+                  let configuration = try? JSONDecoder().decode(
+                    NativeHTTPConfiguration.self,
+                    from: data
+                  ) else {
+                return .disabled
+            }
+            return configuration.normalized
+        }
+        nonmutating set {
+            let configuration = newValue.normalized
+            if let data = try? JSONEncoder().encode(configuration) {
+                defaults.set(data, forKey: Key.nativeHTTP)
             }
         }
     }

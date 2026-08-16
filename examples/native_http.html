@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ViewDeck native HTTP example</title>
+<style>
+  body { margin: 2rem; font: 16px system-ui; }
+  button { font: inherit; padding: 0.6rem 1rem; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<button id="request">Request allowlisted API</button>
+<pre id="result">Ready.</pre>
+<script>
+  const result = document.querySelector("#result");
+
+  document.querySelector("#request").addEventListener("click", async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await window.viewdeck.nativeHttp.request({
+        url: "https://api.example.com/v1/state",
+        method: "GET",
+        headers: { Accept: "application/json" },
+        responseType: "json",
+        signal: controller.signal,
+      });
+      result.textContent = JSON.stringify({
+        status: response.status,
+        data: response.data,
+      }, null, 2);
+    } catch (error) {
+      result.textContent = `${error.code || error.name}: ${error.message}`;
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+</script>

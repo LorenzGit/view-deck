@@ -290,6 +290,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private let sensorView = FlippedView()
     private let homeIndicator = FlippedView()
     private let qaScriptMessageHandler: QAScriptMessageHandler
+    private let nativeHTTPBridge: NativeHTTPBridge
     private let webView: WKWebView
     private var headerWebView: WKWebView?
     private var footerWebView: WKWebView?
@@ -309,18 +310,23 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private var networkBridgeURL: URL?
     private(set) var networkShapingConfiguration: NetworkShapingConfiguration
     private(set) var networkShapingSetupError: Error?
+    private(set) var nativeHTTPConfiguration: NativeHTTPConfiguration
 
     init(
         profile: DeviceProfile,
-        networkShapingConfiguration: NetworkShapingConfiguration = .disabled
+        networkShapingConfiguration: NetworkShapingConfiguration = .disabled,
+        nativeHTTPConfiguration: NativeHTTPConfiguration = .disabled
     ) {
         self.profile = profile
         self.safeArea = profile.safeArea
         self.networkShapingConfiguration = networkShapingConfiguration.normalized
+        self.nativeHTTPConfiguration = nativeHTTPConfiguration.normalized
 
         let configuration = WKWebViewConfiguration()
         let qaScriptMessageHandler = QAScriptMessageHandler()
+        let nativeHTTPBridge = NativeHTTPBridge(configuration: nativeHTTPConfiguration)
         self.qaScriptMessageHandler = qaScriptMessageHandler
+        self.nativeHTTPBridge = nativeHTTPBridge
         let websiteDataStore = WKWebsiteDataStore(
             forIdentifier: Self.primaryWebsiteDataStoreIdentifier
         )
@@ -342,6 +348,11 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         configuration.preferences.isElementFullscreenEnabled = true
         configuration.userContentController.add(qaScriptMessageHandler, name: "viewdeckQA")
+        configuration.userContentController.addScriptMessageHandler(
+            nativeHTTPBridge,
+            contentWorld: .page,
+            name: NativeHTTPBridge.messageHandlerName
+        )
         Self.enableDeveloperTools(in: configuration)
         webView = WKWebView(frame: .zero, configuration: configuration)
 
@@ -399,10 +410,25 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
     deinit {
         audioMonitorTimer?.invalidate()
+        nativeHTTPBridge.shutdown()
         if networkProxy != nil {
             webView.configuration.websiteDataStore.proxyConfigurations = []
         }
         networkProxy?.stop()
+    }
+
+    func applyNativeHTTPConfiguration(
+        _ requestedConfiguration: NativeHTTPConfiguration,
+        reloadIfNeeded: Bool = true
+    ) {
+        let configuration = requestedConfiguration.normalized
+        nativeHTTPConfiguration = configuration
+        nativeHTTPBridge.update(configuration: configuration)
+        rebuildEnvironment(reload: reloadIfNeeded && currentURL != nil)
+    }
+
+    func nativeHTTPReport() -> [String: Any] {
+        nativeHTTPBridge.report()
     }
 
     @discardableResult
@@ -640,6 +666,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
 
         navigationGeneration &+= 1
+        nativeHTTPBridge.resetForCleanSiteRun()
         let generation = navigationGeneration
         safariTop.address = url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString
         let request = PreviewNavigationPolicy.request(for: requestURL, bypassCache: bypassCache)
@@ -687,6 +714,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
 
     func loadLocalFile(_ file: URL, resetSiteData: Bool = false) {
         navigationGeneration &+= 1
+        nativeHTTPBridge.resetForCleanSiteRun()
         let generation = navigationGeneration
         safariTop.address = file.lastPathComponent
         let performLoad = { [weak self] in
@@ -703,6 +731,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     }
 
     func reload() {
+        nativeHTTPBridge.resetForCleanSiteRun()
         rebuildEnvironment(reload: false)
         webView.reload()
     }
@@ -1607,6 +1636,11 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         controller.removeAllUserScripts()
         controller.addUserScript(WKUserScript(
             source: Self.diagnosticsBootstrapScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        controller.addUserScript(WKUserScript(
+            source: nativeHTTPBridge.bootstrapScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
@@ -3507,11 +3541,13 @@ final class PreviewCanvasView: FlippedView {
 
     init(
         profile: DeviceProfile,
-        networkShapingConfiguration: NetworkShapingConfiguration = .disabled
+        networkShapingConfiguration: NetworkShapingConfiguration = .disabled,
+        nativeHTTPConfiguration: NativeHTTPConfiguration = .disabled
     ) {
         preview = DevicePreviewView(
             profile: profile,
-            networkShapingConfiguration: networkShapingConfiguration
+            networkShapingConfiguration: networkShapingConfiguration,
+            nativeHTTPConfiguration: nativeHTTPConfiguration
         )
         super.init(frame: .zero)
         wantsLayer = true

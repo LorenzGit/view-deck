@@ -109,6 +109,51 @@ final class CLITests: XCTestCase {
         ]))
     }
 
+    func testNativeHTTPOptionsAreOptInRepeatableAndStrictlyHostOnly() throws {
+        let invocation = try CLIInvocation.parse([
+            "inspect", "https://app.example.com",
+            "--native-http",
+            "--native-http-allow-host", "API.EXAMPLE.COM.",
+            "--native-http-allow-host", "api.example.com",
+            "--native-http-allow-host", "127.0.0.1"
+        ])
+
+        XCTAssertTrue(invocation.nativeHTTPConfiguration.enabled)
+        XCTAssertTrue(invocation.hasNativeHTTPOverride)
+        XCTAssertEqual(invocation.nativeHTTPConfiguration.allowedHosts, [
+            "api.example.com", "127.0.0.1"
+        ])
+
+        for invalidHost in [
+            "https://api.example.com", "api.example.com:443", "api.example.com/path",
+            "user@api.example.com", "*.example.com"
+        ] {
+            XCTAssertThrowsError(try CLIInvocation.parse([
+                "inspect", "https://app.example.com",
+                "--native-http-allow-host", invalidHost
+            ]))
+        }
+    }
+
+    func testNativeHTTPLeavesHiddenAndVerifySilentPoliciesUnchanged() throws {
+        let invocation = try CLIInvocation.parse([
+            "inspect", "https://app.example.com",
+            "--native-http",
+            "--native-http-allow-host", "api.example.com",
+            "--audio", "verify-silent"
+        ])
+
+        XCTAssertFalse(invocation.showPreview)
+        XCTAssertEqual(invocation.audioMode, .verifySilent)
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "inspect", "https://app.example.com",
+            "--native-http",
+            "--native-http-allow-host", "api.example.com",
+            "--audio", "verify-silent",
+            "--show-preview"
+        ]))
+    }
+
     func testHiddenPreviewParsesSilentAudioVerification() throws {
         let invocation = try CLIInvocation.parse([
             "inspect",
@@ -265,5 +310,31 @@ final class CLITests: XCTestCase {
             "http://localhost:5173",
             "--output", "/tmp/scenario.txt"
         ]))
+    }
+
+    func testQATemplateAndReplayPreserveNativeHTTPConfiguration() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckNativeHTTPTemplate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appendingPathComponent("native-http.viewdeck.json")
+
+        XCTAssertEqual(ViewDeckCommand.run(arguments: [
+            "qa", "template", "https://app.example.com",
+            "--native-http",
+            "--native-http-allow-host", "api.example.com",
+            "--native-http-allow-host", "assets.example.com",
+            "--output", output.path,
+            "--overwrite"
+        ]), 0)
+
+        let scenario = try QAScenarioFiles.load(output)
+        XCTAssertEqual(scenario.configuration.nativeHTTP, NativeHTTPConfiguration(
+            enabled: true,
+            allowedHosts: ["api.example.com", "assets.example.com"]
+        ))
+        let replay = try CLIInvocation.parse(["qa", "replay", output.path])
+        let effective = CLIReplayConfiguration.effective(scenario: scenario, invocation: replay)
+        XCTAssertEqual(effective.nativeHTTP, scenario.configuration.nativeHTTP)
     }
 }
