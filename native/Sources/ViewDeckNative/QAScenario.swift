@@ -98,6 +98,7 @@ struct QASourceConfiguration: Codable, Equatable {
     var npmScript: String?
     var customCommand: String?
     var staticHTMLPath: String?
+    var route: String? = nil
 }
 
 struct QALayerConfiguration: Codable, Equatable {

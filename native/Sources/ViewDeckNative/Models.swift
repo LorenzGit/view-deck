@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 
 enum AppInfo {
+    static let bundleIdentifier = "studio.viewdeck.native"
+
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
     }
@@ -379,7 +381,7 @@ struct HTMLLayerReference: Codable, Equatable, Identifiable {
 
 enum HTMLLayerStore {
     private static let key = "viewdeck.native.html-layer-library"
-    private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
+    private static let defaults = UserDefaults(suiteName: AppInfo.bundleIdentifier) ?? .standard
     private static let bundledLayerRenames = [
         "sample-game-header": "h5_header",
         "minimal-footer": "h5_footer",
@@ -500,7 +502,7 @@ struct CustomDeviceSetup: Codable, Equatable, Identifiable {
 
 enum CustomDeviceSetupStore {
     private static let key = "viewdeck.native.custom-devices"
-    private static let defaults = UserDefaults(suiteName: "studio.viewdeck.native") ?? .standard
+    private static let defaults = UserDefaults(suiteName: AppInfo.bundleIdentifier) ?? .standard
 
     static func load(store: UserDefaults = defaults) -> [CustomDeviceSetup] {
         guard let data = store.data(forKey: key) else { return [] }

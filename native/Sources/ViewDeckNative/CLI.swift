@@ -29,6 +29,8 @@ public enum ViewDeckCommand {
             case .capabilities:
                 try printCapabilities(json: invocation.json)
                 return 0
+            case .appOpen:
+                return try openApp(invocation)
             case .capture, .inspect, .record:
                 return runPreview(invocation)
             case .qaReplay:
@@ -41,6 +43,96 @@ public enum ViewDeckCommand {
             writeError("Run `viewdeck help` for usage.")
             return 2
         }
+    }
+
+    private static func openApp(_ invocation: CLIInvocation) throws -> Int32 {
+        let executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        guard let appURL = ViewDeckAppBundleLocator.locate(
+            explicitURL: invocation.appBundle,
+            executableURL: executableURL
+        ) else {
+            let detail = invocation.appBundle.map { " at \($0.path)" } ?? " beside the CLI or in Applications"
+            throw CLIError.invalidArgument("Could not find ViewDeck.app\(detail). Use --app-path <ViewDeck.app>.")
+        }
+
+        let request = try CLIAppOpenRequestBuilder.make(invocation)
+        let store = ViewDeckAppRequestStore()
+        if let request { try store.save(request) }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        var launchResult: Result<NSRunningApplication, Error>?
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { app, error in
+            if let app { launchResult = .success(app) }
+            else {
+                launchResult = .failure(error ?? CLIError.invalidArgument("ViewDeck.app did not launch."))
+            }
+        }
+        let deadline = Date(timeIntervalSinceNow: 15)
+        while launchResult == nil, Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+        }
+        guard let launchResult else {
+            if let request { store.remove(id: request.id) }
+            throw CLIError.invalidArgument("Timed out while opening ViewDeck.app.")
+        }
+
+        let application: NSRunningApplication
+        switch launchResult {
+        case .success(let value): application = value
+        case .failure(let error):
+            if let request { store.remove(id: request.id) }
+            throw error
+        }
+
+        if let request {
+            DistributedNotificationCenter.default().post(
+                name: ViewDeckAppRequestStore.notificationName,
+                object: ViewDeckAppRequestStore.bundleIdentifier
+            )
+            let deadline = Date(timeIntervalSinceNow: 10)
+            while !store.wasApplied(id: request.id), Date() < deadline {
+                _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+            }
+            guard store.wasApplied(id: request.id) else {
+                throw CLIError.invalidArgument(
+                    "ViewDeck opened but did not apply the configuration request. Quit any older running ViewDeck build and try again."
+                )
+            }
+            store.clearApplied(id: request.id)
+        }
+
+        if invocation.json {
+            var report: [String: Any] = [
+                "schemaVersion": 1,
+                "ok": true,
+                "command": "app open",
+                "app": appURL.path,
+                "processIdentifier": application.processIdentifier,
+                "configured": request != nil
+            ]
+            if let request {
+                report["requestID"] = request.id
+                report["source"] = request.source.map { source in
+                    source.projectPath ?? source.staticHTMLPath ?? source.finalURL
+                        ?? source.requestedURL ?? ""
+                } ?? ""
+                report["device"] = request.configuration?.profile.id ?? ""
+                report["orientation"] = request.configuration?.orientation ?? ""
+                report["inspector"] = request.inspector ?? ""
+                report["nativeHttp"] = [
+                    "enabled": request.configuration?.nativeHTTP?.enabled ?? false,
+                    "allowedHosts": request.configuration?.nativeHTTP?.allowedHosts ?? []
+                ]
+            }
+            print(String(data: try CLIJSON.data(report, pretty: true), encoding: .utf8)!)
+        } else if request != nil {
+            print("Opened and configured ViewDeck: \(appURL.path)")
+        } else {
+            print("Opened ViewDeck: \(appURL.path)")
+        }
+        return 0
     }
 
     private static func runPreview(_ invocation: CLIInvocation) -> Int32 {
@@ -137,94 +229,21 @@ public enum ViewDeckCommand {
 
     private static func writeQATemplate(_ invocation: CLIInvocation) throws -> Int32 {
         let manager = FileManager.default
-        let devices = BuiltinDevices.all + CustomDeviceSetupStore.load().map(\.profile)
-        guard let device = devices.first(where: { $0.id == invocation.deviceID }) else {
-            throw CLIError.unknownDevice(invocation.deviceID)
-        }
         guard let output = invocation.scenarioOutput else {
             throw CLIError.invalidArgument("qa template requires --output <scenario.viewdeck.json>.")
         }
         if manager.fileExists(atPath: output.path), !invocation.overwrite {
             throw CLIError.outputExists(output.path)
         }
-        if let file = invocation.localFile, !manager.fileExists(atPath: file.path) {
-            throw CLIError.missingFile(file.path)
-        }
-        if let project = invocation.project {
-            var isDirectory: ObjCBool = false
-            guard manager.fileExists(atPath: project.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue else {
-                throw CLIError.missingDirectory(project.path)
-            }
-        }
-        for file in [
-            invocation.headerFile,
-            invocation.footerFile,
-            invocation.leftFile,
-            invocation.rightFile
-        ].compactMap({ $0 }) {
-            guard manager.fileExists(atPath: file.path) else {
-                throw CLIError.missingFile(file.path)
-            }
-        }
         try manager.createDirectory(
             at: output.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
-        let headerHTML = try invocation.headerFile.map {
-            try String(contentsOf: $0, encoding: .utf8)
+        let configuration = try CLIConfigurationFactory.make(invocation: invocation)
+        guard let source = try CLISourceConfigurationFactory.make(invocation: invocation) else {
+            throw CLIError.invalidArgument("qa template requires a source.")
         }
-        let footerHTML = try invocation.footerFile.map {
-            try String(contentsOf: $0, encoding: .utf8)
-        }
-        let leftHTML = try invocation.leftFile.map {
-            try String(contentsOf: $0, encoding: .utf8)
-        }
-        let rightHTML = try invocation.rightFile.map {
-            try String(contentsOf: $0, encoding: .utf8)
-        }
-        let header = QALayerConfiguration(
-            kind: .header,
-            html: headerHTML,
-            height: invocation.headerHeight,
-            sourcePath: invocation.headerFile?.path,
-            baseURL: invocation.headerFile?.deletingLastPathComponent()
-        )
-        let footer = QALayerConfiguration(
-            kind: .footer,
-            html: footerHTML,
-            height: invocation.footerHeight,
-            sourcePath: invocation.footerFile?.path,
-            baseURL: invocation.footerFile?.deletingLastPathComponent()
-        )
-        let left = QALayerConfiguration(
-            kind: .left,
-            html: leftHTML,
-            height: invocation.leftWidth,
-            sourcePath: invocation.leftFile?.path,
-            baseURL: invocation.leftFile?.deletingLastPathComponent()
-        )
-        let right = QALayerConfiguration(
-            kind: .right,
-            html: rightHTML,
-            height: invocation.rightWidth,
-            sourcePath: invocation.rightFile?.path,
-            baseURL: invocation.rightFile?.deletingLastPathComponent()
-        )
-        let configuration = QADeviceConfiguration.template(
-            profile: device,
-            landscape: invocation.landscape,
-            showSafeArea: invocation.showSafeArea,
-            applySafeAreaToPage: invocation.applySafeArea,
-            networkShapingConfiguration: invocation.networkShapingConfiguration,
-            nativeHTTPConfiguration: invocation.nativeHTTPConfiguration,
-            header: header,
-            footer: footer,
-            left: left,
-            right: right
-        )
-        let source = try qaTemplateSource(invocation)
         let now = Date()
         let scenario = QAScenario(
             schemaVersion: 1,
@@ -270,7 +289,7 @@ public enum ViewDeckCommand {
                 "ok": true,
                 "command": "qa template",
                 "output": output.path,
-                "device": device.id,
+                "device": configuration.profile.id,
                 "eventCount": 0
             ]
             print(String(data: try CLIJSON.data(report, pretty: true), encoding: .utf8)!)
@@ -278,50 +297,6 @@ public enum ViewDeckCommand {
             print("Scenario template: \(output.path)")
         }
         return 0
-    }
-
-    private static func qaTemplateSource(
-        _ invocation: CLIInvocation
-    ) throws -> QASourceConfiguration {
-        if let file = invocation.localFile {
-            return QASourceConfiguration(
-                requestedURL: file.absoluteString,
-                finalURL: file.absoluteString,
-                pageTitle: nil,
-                projectPath: nil,
-                launchMode: "staticHTML",
-                npmScript: nil,
-                customCommand: nil,
-                staticHTMLPath: file.path
-            )
-        }
-        if let project = invocation.project {
-            return QASourceConfiguration(
-                requestedURL: nil,
-                finalURL: nil,
-                pageTitle: nil,
-                projectPath: project.path,
-                launchMode: invocation.serverCommand == nil ? "npmScript" : "customCommand",
-                npmScript: invocation.serverCommand == nil ? invocation.npmScript ?? "dev" : nil,
-                customCommand: invocation.serverCommand,
-                staticHTMLPath: nil
-            )
-        }
-        guard let rawURL = invocation.sourceURL,
-              let baseURL = PreviewNavigationPolicy.normalizedWebURL(from: rawURL) else {
-            throw CLIError.invalidArgument("Invalid URL `\(invocation.sourceURL ?? "")`.")
-        }
-        let url = CLIPath.appending(route: invocation.route, to: baseURL).absoluteString
-        return QASourceConfiguration(
-            requestedURL: url,
-            finalURL: url,
-            pageTitle: nil,
-            projectPath: nil,
-            launchMode: "url",
-            npmScript: nil,
-            customCommand: nil,
-            staticHTMLPath: nil
-        )
     }
 
     private static func qaAuthoringMetadata(
@@ -524,7 +499,14 @@ public enum ViewDeckCommand {
         let capabilities: [String: Any] = [
             "schemaVersion": 1,
             "commands": [
-                "devices", "capture", "inspect", "record", "qa replay", "qa template", "capabilities"
+                "devices", "app open", "capture", "inspect", "record",
+                "qa replay", "qa template", "capabilities"
+            ],
+            "interactiveApp": [
+                "openAndConfigure": true,
+                "runningAppUpdates": true,
+                "scenarioHandoff": true,
+                "inspectorSelection": ["device", "server", "ports", "network"]
             ],
             "sources": ["url", "localFile", "npmScript", "customCommand"],
             "readiness": ["load", "cssSelector", "javaScript", "prepareJavaScript", "delay"],
@@ -593,7 +575,7 @@ public enum ViewDeckCommand {
         }
     }
 
-    fileprivate static func writeError(_ value: String) {
+    static func writeError(_ value: String) {
         FileHandle.standardError.write(Data(("viewdeck: \(value)\n").utf8))
     }
 }
@@ -604,6 +586,7 @@ struct CLIInvocation {
         case version
         case devices
         case capabilities
+        case appOpen
         case capture
         case inspect
         case record
@@ -618,6 +601,9 @@ struct CLIInvocation {
 
     var operation: Operation
     var json = false
+    var appBundle: URL?
+    var appInspector: String?
+    var hasAppConfigurationOptions = false
     var sourceURL: String?
     var localFile: URL?
     var project: URL?
@@ -680,6 +666,13 @@ struct CLIInvocation {
         switch command {
         case "devices": operation = .devices
         case "capabilities": operation = .capabilities
+        case "open": operation = .appOpen
+        case "app":
+            guard arguments.indices.contains(1), arguments[1] == "open" else {
+                throw CLIError.invalidArgument("Use `viewdeck app open [source] [options]`.")
+            }
+            operation = .appOpen
+            firstOptionIndex = 2
         case "capture": operation = .capture
         case "inspect", "audit": operation = .inspect
         case "record": operation = .record
@@ -717,8 +710,39 @@ struct CLIInvocation {
 
         while arguments.indices.contains(index) {
             let argument = arguments[index]
+            let appOnlyOptions = ["--app-path", "--inspector"]
+            if operation != .appOpen, appOnlyOptions.contains(argument) {
+                throw CLIError.invalidArgument("\(argument) is available only with `viewdeck app open`.")
+            }
+            if operation != .appOpen, operation != .qaReplay, argument == "--scenario" {
+                throw CLIError.invalidArgument(
+                    "--scenario is available only with `viewdeck app open` or `viewdeck qa replay`."
+                )
+            }
+            let unsupportedAppOptions = [
+                "--wait-for", "--wait-js", "--prepare-js", "--delay", "--timeout",
+                "--output", "--name", "--screenshot", "--video", "--report", "--scale",
+                "--video-scale", "--duration", "--fps", "--overwrite",
+                "--fail-on-page-error", "--fail-on-issues", "--show-preview", "--audio",
+                "--speed", "--artifacts"
+            ]
+            if operation == .appOpen, unsupportedAppOptions.contains(argument) {
+                throw CLIError.invalidArgument("\(argument) is unavailable for `viewdeck app open`.")
+            }
             switch argument {
             case "--json": value.json = true
+            case "--app-path":
+                value.appBundle = CLIPath.url(try requiredValue(for: argument), directory: true)
+            case "--inspector":
+                let inspector = try requiredValue(for: argument)
+                guard ["device", "server", "ports", "network"].contains(inspector) else {
+                    throw CLIError.invalidArgument(
+                        "--inspector must be `device`, `server`, `ports`, or `network`."
+                    )
+                }
+                value.appInspector = inspector
+            case "--scenario":
+                value.scenarioInput = CLIPath.url(try requiredValue(for: argument))
             case "--url": value.sourceURL = try requiredValue(for: argument)
             case "--file":
                 value.localFile = CLIPath.url(try requiredValue(for: argument))
@@ -732,30 +756,44 @@ struct CLIInvocation {
                 value.route = try requiredValue(for: argument)
             case "--device":
                 value.deviceID = try requiredValue(for: argument)
+                value.hasAppConfigurationOptions = true
             case "--orientation":
                 let orientation = try requiredValue(for: argument)
                 guard ["portrait", "landscape"].contains(orientation) else {
                     throw CLIError.invalidArgument("--orientation must be `portrait` or `landscape`.")
                 }
                 value.landscape = orientation == "landscape"
-            case "--show-safe-area": value.showSafeArea = true
-            case "--apply-safe-area": value.applySafeArea = true
+                value.hasAppConfigurationOptions = true
+            case "--show-safe-area":
+                value.showSafeArea = true
+                value.hasAppConfigurationOptions = true
+            case "--apply-safe-area":
+                value.applySafeArea = true
+                value.hasAppConfigurationOptions = true
             case "--header":
                 value.headerFile = CLIPath.url(try requiredValue(for: argument))
+                value.hasAppConfigurationOptions = true
             case "--header-height":
                 value.headerHeight = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+                value.hasAppConfigurationOptions = true
             case "--footer":
                 value.footerFile = CLIPath.url(try requiredValue(for: argument))
+                value.hasAppConfigurationOptions = true
             case "--footer-height":
                 value.footerHeight = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+                value.hasAppConfigurationOptions = true
             case "--left":
                 value.leftFile = CLIPath.url(try requiredValue(for: argument))
+                value.hasAppConfigurationOptions = true
             case "--left-width":
                 value.leftWidth = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+                value.hasAppConfigurationOptions = true
             case "--right":
                 value.rightFile = CLIPath.url(try requiredValue(for: argument))
+                value.hasAppConfigurationOptions = true
             case "--right-width":
                 value.rightWidth = try positiveCGFloat(try requiredValue(for: argument), flag: argument)
+                value.hasAppConfigurationOptions = true
             case "--wait-for":
                 value.waitSelector = try requiredValue(for: argument)
             case "--wait-js":
@@ -809,6 +847,7 @@ struct CLIInvocation {
             case "--network-enable":
                 value.networkShapingConfiguration.enabled = true
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-rtt-ms":
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.roundTripTimeMilliseconds = try nonnegativeDouble(
@@ -816,6 +855,7 @@ struct CLIInvocation {
                     flag: argument
                 )
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-jitter-ms":
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.jitterMilliseconds = try nonnegativeDouble(
@@ -823,6 +863,7 @@ struct CLIInvocation {
                     flag: argument
                 )
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-down-kbps":
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.downloadKilobitsPerSecond = try nonnegativeDouble(
@@ -830,6 +871,7 @@ struct CLIInvocation {
                     flag: argument
                 )
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-up-kbps":
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.uploadKilobitsPerSecond = try nonnegativeDouble(
@@ -837,10 +879,12 @@ struct CLIInvocation {
                     flag: argument
                 )
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-offline":
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.offline = true
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--network-seed":
                 guard let seed = UInt64(try requiredValue(for: argument)),
                       seed <= NetworkShapingConfiguration.maximumJSONSafeSeed else {
@@ -851,9 +895,11 @@ struct CLIInvocation {
                 value.networkShapingConfiguration.enabled = true
                 value.networkShapingConfiguration.seed = seed
                 value.hasNetworkShapingOverride = true
+                value.hasAppConfigurationOptions = true
             case "--native-http":
                 value.nativeHTTPConfiguration.enabled = true
                 value.hasNativeHTTPOverride = true
+                value.hasAppConfigurationOptions = true
             case "--native-http-allow-host":
                 let rawHost = try requiredValue(for: argument)
                 guard let host = NativeHTTPConfiguration.normalizedHost(rawHost) else {
@@ -865,6 +911,7 @@ struct CLIInvocation {
                     value.nativeHTTPConfiguration.allowedHosts.append(host)
                 }
                 value.hasNativeHTTPOverride = true
+                value.hasAppConfigurationOptions = true
             case "--speed":
                 let speed = try requiredValue(for: argument)
                 if speed == "smart" {
@@ -907,6 +954,38 @@ struct CLIInvocation {
     }
 
     private mutating func validate() throws {
+        if operation == .appOpen {
+            let sourceCount = [sourceURL != nil, localFile != nil, project != nil].filter { $0 }.count
+            guard sourceCount <= 1 else {
+                throw CLIError.invalidArgument("Provide at most one source: a URL, --file, or --project.")
+            }
+            if scenarioInput != nil, sourceCount > 0 || hasAppConfigurationOptions {
+                throw CLIError.invalidArgument(
+                    "Use either --scenario or direct source/device/layout options, not both."
+                )
+            }
+            if let scenarioInput, scenarioInput.pathExtension.lowercased() != "json" {
+                throw CLIError.invalidArgument("The app scenario must use the .json extension.")
+            }
+            if serverCommand != nil && npmScript != nil {
+                throw CLIError.invalidArgument("Use either --npm-script or --command, not both.")
+            }
+            if project == nil && (serverCommand != nil || npmScript != nil) {
+                throw CLIError.invalidArgument("--npm-script and --command require --project.")
+            }
+            if route != nil && project == nil && sourceURL == nil {
+                throw CLIError.invalidArgument("--path requires a URL or --project source.")
+            }
+            if project != nil && serverCommand == nil && npmScript == nil { npmScript = "dev" }
+            if showPreview || audioMode != .normal || waitSelector != nil || waitJavaScript != nil
+                || prepareJavaScript != nil || screenshotOutput != nil || videoOutput != nil
+                || reportOutput != nil || artifactDirectory != nil || overwrite {
+                throw CLIError.invalidArgument(
+                    "Preview readiness, policy, and artifact options are unavailable for app open."
+                )
+            }
+            return
+        }
         if showPreview && audioMode == .verifySilent {
             throw CLIError.invalidArgument(
                 "--audio verify-silent requires a hidden preview; remove --show-preview."
@@ -1000,6 +1079,178 @@ struct CLIInvocation {
             throw CLIError.invalidArgument("\(flag) must be between 0.5 and 3.")
         }
         return result
+    }
+}
+
+enum CLIConfigurationFactory {
+    static func make(invocation: CLIInvocation) throws -> QADeviceConfiguration {
+        try validateFiles(invocation: invocation)
+        let devices = BuiltinDevices.all + CustomDeviceSetupStore.load().map(\.profile)
+        guard let device = devices.first(where: { $0.id == invocation.deviceID }) else {
+            throw CLIError.unknownDevice(invocation.deviceID)
+        }
+
+        func layer(
+            kind: HTMLLayerKind,
+            file: URL?,
+            extent: CGFloat
+        ) throws -> QALayerConfiguration {
+            let html = try file.map { try String(contentsOf: $0, encoding: .utf8) }
+            return QALayerConfiguration(
+                kind: kind,
+                html: html,
+                height: extent,
+                sourcePath: file?.path,
+                baseURL: file?.deletingLastPathComponent()
+            )
+        }
+
+        return QADeviceConfiguration.template(
+            profile: device,
+            landscape: invocation.landscape,
+            showSafeArea: invocation.showSafeArea,
+            applySafeAreaToPage: invocation.applySafeArea,
+            networkShapingConfiguration: invocation.networkShapingConfiguration,
+            nativeHTTPConfiguration: invocation.nativeHTTPConfiguration,
+            header: try layer(
+                kind: .header,
+                file: invocation.headerFile,
+                extent: invocation.headerHeight
+            ),
+            footer: try layer(
+                kind: .footer,
+                file: invocation.footerFile,
+                extent: invocation.footerHeight
+            ),
+            left: try layer(
+                kind: .left,
+                file: invocation.leftFile,
+                extent: invocation.leftWidth
+            ),
+            right: try layer(
+                kind: .right,
+                file: invocation.rightFile,
+                extent: invocation.rightWidth
+            )
+        )
+    }
+
+    static func validateFiles(invocation: CLIInvocation) throws {
+        let manager = FileManager.default
+        if let file = invocation.localFile, !manager.fileExists(atPath: file.path) {
+            throw CLIError.missingFile(file.path)
+        }
+        if let project = invocation.project {
+            var isDirectory: ObjCBool = false
+            guard manager.fileExists(atPath: project.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw CLIError.missingDirectory(project.path)
+            }
+        }
+        for file in [
+            invocation.headerFile,
+            invocation.footerFile,
+            invocation.leftFile,
+            invocation.rightFile
+        ].compactMap({ $0 }) where !manager.fileExists(atPath: file.path) {
+            throw CLIError.missingFile(file.path)
+        }
+    }
+}
+
+enum CLISourceConfigurationFactory {
+    static func make(invocation: CLIInvocation) throws -> QASourceConfiguration? {
+        if let file = invocation.localFile {
+            return QASourceConfiguration(
+                requestedURL: file.absoluteString,
+                finalURL: file.absoluteString,
+                pageTitle: nil,
+                projectPath: nil,
+                launchMode: "staticHTML",
+                npmScript: nil,
+                customCommand: nil,
+                staticHTMLPath: file.path
+            )
+        }
+        if let project = invocation.project {
+            return QASourceConfiguration(
+                requestedURL: nil,
+                finalURL: nil,
+                pageTitle: nil,
+                projectPath: project.path,
+                launchMode: invocation.serverCommand == nil ? "npmScript" : "customCommand",
+                npmScript: invocation.serverCommand == nil ? invocation.npmScript ?? "dev" : nil,
+                customCommand: invocation.serverCommand,
+                staticHTMLPath: nil,
+                route: invocation.route
+            )
+        }
+        guard let rawURL = invocation.sourceURL else { return nil }
+        guard let baseURL = PreviewNavigationPolicy.normalizedWebURL(from: rawURL) else {
+            throw CLIError.invalidArgument("Invalid URL `\(rawURL)`.")
+        }
+        let url = CLIPath.appending(route: invocation.route, to: baseURL).absoluteString
+        return QASourceConfiguration(
+            requestedURL: url,
+            finalURL: url,
+            pageTitle: nil,
+            projectPath: nil,
+            launchMode: "url",
+            npmScript: nil,
+            customCommand: nil,
+            staticHTMLPath: nil
+        )
+    }
+
+    static func validateFiles(source: QASourceConfiguration) throws {
+        if source.launchMode == "staticHTML", let path = source.staticHTMLPath,
+           !FileManager.default.fileExists(atPath: path) {
+            throw CLIError.missingFile(path)
+        }
+        if let path = source.projectPath {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw CLIError.missingDirectory(path)
+            }
+        }
+    }
+}
+
+enum CLIAppOpenRequestBuilder {
+    static func make(_ invocation: CLIInvocation) throws -> ViewDeckAppOpenRequest? {
+        if let scenarioURL = invocation.scenarioInput {
+            guard FileManager.default.fileExists(atPath: scenarioURL.path) else {
+                throw CLIError.missingFile(scenarioURL.path)
+            }
+            let scenario = try QAScenarioFiles.load(scenarioURL)
+            guard scenario.schemaVersion == 1 else {
+                throw CLIError.invalidArgument(
+                    "Unsupported QA scenario schema \(scenario.schemaVersion)."
+                )
+            }
+            try CLISourceConfigurationFactory.validateFiles(source: scenario.source)
+            return ViewDeckAppOpenRequest(
+                configuration: scenario.configuration,
+                source: scenario.source,
+                inspector: invocation.appInspector
+            )
+        }
+
+        let source = try CLISourceConfigurationFactory.make(invocation: invocation)
+        let shouldConfigure = source != nil || invocation.hasAppConfigurationOptions
+        guard shouldConfigure || invocation.appInspector != nil else { return nil }
+        let configuration: QADeviceConfiguration?
+        if shouldConfigure {
+            configuration = try CLIConfigurationFactory.make(invocation: invocation)
+        } else {
+            configuration = nil
+        }
+        return ViewDeckAppOpenRequest(
+            configuration: configuration,
+            source: source,
+            inspector: invocation.appInspector
+        )
     }
 }
 
@@ -2220,7 +2471,7 @@ private enum CLIJSON {
     }
 }
 
-private enum CLIError: LocalizedError {
+enum CLIError: LocalizedError {
     case invalidArgument(String)
     case unknownDevice(String)
     case missingFile(String)
@@ -2263,11 +2514,12 @@ private enum CLIHelp {
     static let text = """
     ViewDeck CLI
 
-    Render, inspect, and record websites with ViewDeck's native WKWebView device previews.
+    Open the ViewDeck app or render, inspect, and record native WKWebView previews.
 
     USAGE
       viewdeck devices list [--json]
       viewdeck capabilities [--json]
+      viewdeck app open [<url>] [options]
       viewdeck capture <url> --output <image.png> [options]
       viewdeck inspect <url> [--report <report.json>] [options]
       viewdeck record <url> --output <video.mp4> [options]
@@ -2281,6 +2533,13 @@ private enum CLIHelp {
       --npm-script <name>            npm script to run (default: dev)
       --command <command>            Custom command to run inside --project
       --path <route>                 Route to load after server discovery
+
+    INTERACTIVE APP
+      app open                       Open or activate ViewDeck and apply supplied settings
+      --scenario <scenario.json>     Apply a scenario's source and configuration without replay
+      --inspector <name>             Show device, server, ports, or network
+      --app-path <ViewDeck.app>      Use an explicit application bundle
+      `viewdeck open` is a shorthand for `viewdeck app open`
 
     DEVICE AND LAYOUT
       --device <id>                  Device profile (default: iphone-17-pro-max)
@@ -2350,6 +2609,8 @@ private enum CLIHelp {
 
     EXAMPLES
       viewdeck devices list --json
+      viewdeck app open http://localhost:5173 --device iphone-17-pro-max --native-http --native-http-allow-host api.example.com --inspector network
+      viewdeck app open --scenario gameplay.viewdeck.json
       viewdeck capture http://localhost:5173 --device iphone-17-pro-max --output page.png --report page.json
       viewdeck inspect --project . --npm-script dev --wait-for canvas --json
       viewdeck inspect --project . --audio verify-silent --report audio.json --json

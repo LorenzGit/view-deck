@@ -25,6 +25,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController = controller
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(appOpenRequestReceived(_:)),
+            name: ViewDeckAppRequestStore.notificationName,
+            object: ViewDeckAppRequestStore.bundleIdentifier,
+            suspensionBehavior: .deliverImmediately
+        )
+        applyPendingAppOpenRequest()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -33,7 +41,28 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DistributedNotificationCenter.default().removeObserver(self)
         mainWindowController?.stopServices()
+    }
+
+    @objc private func appOpenRequestReceived(_ notification: Notification) {
+        applyPendingAppOpenRequest()
+    }
+
+    private func applyPendingAppOpenRequest() {
+        let store = ViewDeckAppRequestStore()
+        do {
+            guard let request = try store.load() else { return }
+            guard request.schemaVersion == ViewDeckAppOpenRequest.currentSchemaVersion else {
+                store.remove(id: request.id)
+                return
+            }
+            mainWindowController?.applyAppOpenRequest(request)
+            store.markApplied(id: request.id)
+        } catch {
+            store.remove()
+            ViewDeckCommand.writeError("Could not apply app-open request: \(error.localizedDescription)")
+        }
     }
 
     private func installMainMenu() {

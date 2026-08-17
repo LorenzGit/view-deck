@@ -106,6 +106,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var replayErrors: [String] = []
     private var replayStartedAt: Date?
     private var pendingQAServerLaunch: QASourceConfiguration?
+    private var pendingAppServerLaunch: QASourceConfiguration?
 
     private struct QAReplayRequest {
         var scenario: QAScenario
@@ -147,6 +148,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         case server
         case ports
         case network
+
+        init?(cliName: String) {
+            switch cliName {
+            case "device": self = .device
+            case "server": self = .server
+            case "ports": self = .ports
+            case "network": self = .network
+            default: return nil
+            }
+        }
     }
 
     private var selectedInspectorTab: InspectorTab {
@@ -2035,7 +2046,107 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         )
     }
 
-    private func applyRecordedConfiguration(_ configuration: QADeviceConfiguration) {
+    func applyAppOpenRequest(_ request: ViewDeckAppOpenRequest) {
+        if let source = request.source { prepareAppSource(source) }
+        if let configuration = request.configuration {
+            applyRecordedConfiguration(configuration, persistForManualUse: true)
+        }
+        if let name = request.inspector, let inspector = InspectorTab(cliName: name) {
+            inspectorTabs.selectedSegment = inspector.rawValue
+            preferences.inspectorTabIndex = inspector.rawValue
+            rebuildInspector()
+            updateLocalhostMonitoring()
+            updateNetworkMonitoring()
+        }
+
+        if let source = request.source { loadAppSource(source) }
+        else if request.configuration != nil { canvas.preview.reload() }
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func prepareAppSource(_ source: QASourceConfiguration) {
+        if source.launchMode == "staticHTML", let path = source.staticHTMLPath {
+            let file = URL(fileURLWithPath: path).standardizedFileURL
+            setProjectFolder(file.deletingLastPathComponent())
+            launchMode = .staticHTML
+            staticHTMLFile = file
+            rebuildInspector()
+            return
+        }
+        if let path = source.projectPath {
+            setProjectFolder(URL(fileURLWithPath: path, isDirectory: true))
+            if source.launchMode == "customCommand" {
+                launchMode = .customCommand
+                customCommandField.stringValue = source.customCommand ?? ""
+            } else {
+                launchMode = .npmScript
+                if let script = source.npmScript { scriptPopup.selectItem(withTitle: script) }
+            }
+            rebuildInspector()
+            return
+        }
+        if let value = source.finalURL ?? source.requestedURL {
+            addressField.stringValue = value
+            toolbarModel.address = value
+        }
+    }
+
+    private func loadAppSource(_ source: QASourceConfiguration) {
+        if source.launchMode == "staticHTML",
+           let path = source.staticHTMLPath,
+           FileManager.default.fileExists(atPath: path) {
+            previewStaticHTML(URL(fileURLWithPath: path))
+            return
+        }
+        if source.projectPath != nil {
+            if server.state == .running || server.state == .starting || server.state == .stopping {
+                pendingAppServerLaunch = source
+                server.stop()
+            } else {
+                startAppProject(source)
+            }
+            return
+        }
+        guard let value = source.finalURL ?? source.requestedURL else {
+            presentError(title: "Couldn’t open the requested source", error: QAAppError.missingSource)
+            return
+        }
+        addressField.stringValue = value
+        toolbarModel.address = value
+        canvas.preview.load(value)
+    }
+
+    private func startAppProject(_ source: QASourceConfiguration) {
+        guard let path = source.projectPath else { return }
+        let folder = URL(fileURLWithPath: path, isDirectory: true)
+        pendingAppServerLaunch = source
+        do {
+            canvas.preview.prepareForLocalServerLaunch()
+            if source.launchMode == "customCommand", let command = source.customCommand {
+                pendingServerPreviewIdentity = serverPreviewIdentity(
+                    folder: folder,
+                    launchDescription: command
+                )
+                try server.startCommand(folder: folder, command: command)
+            } else {
+                let script = source.npmScript ?? "dev"
+                pendingServerPreviewIdentity = serverPreviewIdentity(
+                    folder: folder,
+                    launchDescription: "npm run \(script)"
+                )
+                try server.start(folder: folder, script: script)
+            }
+        } catch {
+            pendingAppServerLaunch = nil
+            pendingServerPreviewIdentity = nil
+            presentError(title: "Couldn’t start the requested project", error: error)
+        }
+    }
+
+    private func applyRecordedConfiguration(
+        _ configuration: QADeviceConfiguration,
+        persistForManualUse: Bool = false
+    ) {
         canvas.preview.profile = configuration.profile
         canvas.preview.safeArea = configuration.safeArea.configuredPortrait
         canvas.preview.landscape = configuration.orientation == "landscape"
@@ -2049,6 +2160,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             configuration.nativeHTTP ?? .disabled,
             reloadIfNeeded: false
         )
+        if persistForManualUse {
+            preferences.nativeHTTPConfiguration = configuration.nativeHTTP ?? .disabled
+            preferences.selectedDeviceID = configuration.profile.id
+            selectedIndex = devices.firstIndex(where: { $0.id == configuration.profile.id }) ?? -1
+            if let projectFolder {
+                preferences.rememberDevice(configuration.profile.id, forProject: projectFolder)
+            }
+        }
 
         let header = configuration.header
         sampleHeaderEnabled = header.identifier == "builtin-sample-header"
@@ -2067,6 +2186,9 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
         applyRecordedSideLayer(configuration.left, kind: .left)
         applyRecordedSideLayer(configuration.right, kind: .right)
+        widthField.doubleValue = configuration.profile.viewport.width
+        heightField.doubleValue = configuration.profile.viewport.height
+        if persistForManualUse { refreshDeviceLists() }
         updateStatus()
         rebuildInspector()
     }
@@ -2169,7 +2291,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     }
 
     private func replayURL(serverURL: URL, source: QASourceConfiguration) -> URL {
-        guard let raw = source.finalURL,
+        guard let raw = source.route ?? source.finalURL ?? source.requestedURL,
               let recorded = URL(string: raw),
               var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false) else {
             return serverURL
@@ -3393,6 +3515,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             if let source = pendingQAServerLaunch {
                 pendingQAServerLaunch = nil
                 startRecordedProject(source)
+            } else if let source = pendingAppServerLaunch {
+                startAppProject(source)
             }
         case .starting:
             canvas.preview.prepareForLocalServerLaunch()
@@ -3409,6 +3533,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
                     addressField.stringValue = target.absoluteString
                     toolbarModel.address = target.absoluteString
                     canvas.preview.loadLocalServer(target.absoluteString, resetSiteData: true)
+                } else if let source = pendingAppServerLaunch {
+                    pendingAppServerLaunch = nil
+                    let target = replayURL(serverURL: url, source: source)
+                    addressField.stringValue = target.absoluteString
+                    toolbarModel.address = target.absoluteString
+                    inspectAndLoadDetectedServer(target, serverURL: url)
                 } else {
                     addressField.stringValue = url.absoluteString
                     toolbarModel.address = url.absoluteString
@@ -3418,19 +3548,21 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         case .stopping: serverStatusLabel.stringValue = "Stopping server…"
         case .failed:
             pendingServerPreviewIdentity = nil
+            pendingAppServerLaunch = nil
             serverStatusLabel.stringValue = "Server exited with an error"
         }
         if selectedInspectorTab == .server { rebuildInspector() }
     }
 
-    private func inspectAndLoadDetectedServer(_ url: URL) {
+    private func inspectAndLoadDetectedServer(_ url: URL, serverURL: URL? = nil) {
         let nextIdentity = pendingServerPreviewIdentity
+        let expectedServerURL = serverURL ?? url
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result { try LocalhostPortScanner.scan() }
             DispatchQueue.main.async {
                 guard let self,
                       self.server.state == .running,
-                      self.server.serverURL == url else { return }
+                      self.server.serverURL == expectedServerURL else { return }
 
                 if case .success(let processes) = result {
                     self.localhostProcesses = processes

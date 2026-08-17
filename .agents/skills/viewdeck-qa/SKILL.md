@@ -44,6 +44,8 @@ mktemp -d /tmp/viewdeck-qa.XXXXXX
 
 - Use `capture` or `inspect` for a one-state smoke test or layout audit.
 - Use `qa template` when an agent will author a new scripted interaction.
+- Use `app open` when the user wants ViewDeck configured for continued manual
+  testing. This is an interactive handoff, not a hidden artifact run.
 - Use the interactive ViewDeck UI for recording only when the user explicitly
   asks to watch or drive it. Otherwise use hidden CLI `record` or author a
   scenario from `qa template`.
@@ -333,6 +335,22 @@ For an interactive app run, the same opt-in controls are visible in the
 **Network** inspector as **Enable native HTTP bridge** and **Allowed hosts**.
 Recordings capture that effective configuration; replay restores the scenario
 configuration deterministically.
+
+When handing native HTTP testing back to the user, configure and open the real
+app directly:
+
+```bash
+dist/native/viewdeck app open http://localhost:5173 \
+  --device iphone-17-pro-max \
+  --native-http \
+  --native-http-allow-host api.example.com \
+  --inspector network \
+  --json
+```
+
+The same command updates an already-running app and exits only after the app
+confirms the handoff. To apply every source and device setting from a scenario without replaying its events, use
+`viewdeck app open --scenario /absolute/path/test.viewdeck.json`.
 
 Do not put schemes, ports, paths, credentials, or wildcards in allow-host
 values. The bridge uses normal `URLSession` TLS verification, checks initial

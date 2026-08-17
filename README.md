@@ -55,6 +55,40 @@ The build also creates `dist/native/viewdeck`, a standalone command-line executa
 
 ## Command-line automation
 
+### Configure the interactive app
+
+Use `app open` when an agent should prepare the real ViewDeck workspace and
+hand control back for manual testing. The command opens or activates
+`ViewDeck.app`, waits for the app to confirm the handoff, and then exits. An
+already-running app applies the handoff immediately.
+
+```bash
+dist/native/viewdeck app open http://localhost:5173 \
+  --device iphone-17-pro-max \
+  --orientation landscape \
+  --native-http \
+  --native-http-allow-host api.example.com \
+  --inspector network \
+  --json
+```
+
+Source, device, orientation, safe-area, layer, network-shaping, and native-HTTP
+options match the deterministic CLI commands. A project source starts its npm
+script or custom command in the app, including `--path`. Supplying a source or
+configuration options replaces the app's effective preview configuration;
+running `viewdeck app open` without them only activates the existing workspace.
+`viewdeck open` is shorthand for the same command.
+
+To continue manually from an exact recorded or agent-authored setup without
+replaying its inputs:
+
+```bash
+dist/native/viewdeck app open --scenario /tmp/gameplay.viewdeck.json
+```
+
+The CLI finds `ViewDeck.app` beside itself, then checks a running or registered
+copy. Use `--app-path /path/to/ViewDeck.app` to select another build.
+
 CLI previews are hidden by default. ViewDeck keeps an ordered WebKit panel
 outside the bounds of every connected display so pages can render, receive
 replayed input, and produce screenshots or video without showing a mini device

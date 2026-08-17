@@ -336,5 +336,76 @@ final class CLITests: XCTestCase {
         let replay = try CLIInvocation.parse(["qa", "replay", output.path])
         let effective = CLIReplayConfiguration.effective(scenario: scenario, invocation: replay)
         XCTAssertEqual(effective.nativeHTTP, scenario.configuration.nativeHTTP)
+
+        let app = try CLIInvocation.parse([
+            "app", "open", "--scenario", output.path, "--inspector", "network"
+        ])
+        let handoff = try XCTUnwrap(CLIAppOpenRequestBuilder.make(app))
+        XCTAssertEqual(handoff.configuration, scenario.configuration)
+        XCTAssertEqual(handoff.source, scenario.source)
+        XCTAssertEqual(handoff.inspector, "network")
+    }
+
+    func testAppOpenBuildsInteractiveNativeHTTPHandoff() throws {
+        let invocation = try CLIInvocation.parse([
+            "app", "open", "http://localhost:5173",
+            "--device", "iphone-16-pro",
+            "--orientation", "landscape",
+            "--native-http",
+            "--native-http-allow-host", "API.EXAMPLE.COM.",
+            "--inspector", "network",
+            "--app-path", "/tmp/ViewDeck.app",
+            "--json"
+        ])
+        let request = try XCTUnwrap(CLIAppOpenRequestBuilder.make(invocation))
+
+        XCTAssertEqual(invocation.operation, .appOpen)
+        XCTAssertEqual(invocation.appBundle?.path, "/tmp/ViewDeck.app")
+        XCTAssertEqual(request.source?.finalURL, "http://localhost:5173")
+        XCTAssertEqual(request.configuration?.profile.id, "iphone-16-pro")
+        XCTAssertEqual(request.configuration?.orientation, "landscape")
+        XCTAssertEqual(request.configuration?.nativeHTTP, NativeHTTPConfiguration(
+            enabled: true,
+            allowedHosts: ["api.example.com"]
+        ))
+        XCTAssertEqual(request.inspector, "network")
+    }
+
+    func testAppOpenWithoutSettingsOnlyActivatesTheApp() throws {
+        let invocation = try CLIInvocation.parse(["open"])
+
+        XCTAssertEqual(invocation.operation, .appOpen)
+        XCTAssertNil(try CLIAppOpenRequestBuilder.make(invocation))
+    }
+
+    func testAppOpenProjectPreservesManualRouteAndLaunchMode() throws {
+        let project = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ViewDeckAppOpen-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: project) }
+        let invocation = try CLIInvocation.parse([
+            "app", "open",
+            "--project", project.path,
+            "--command", "npm run bridge",
+            "--path", "/native-http"
+        ])
+        let request = try XCTUnwrap(CLIAppOpenRequestBuilder.make(invocation))
+
+        XCTAssertEqual(request.source?.projectPath, project.path)
+        XCTAssertEqual(request.source?.launchMode, "customCommand")
+        XCTAssertEqual(request.source?.customCommand, "npm run bridge")
+        XCTAssertEqual(request.source?.route, "/native-http")
+    }
+
+    func testAppOpenRejectsScenarioMixedWithDirectConfiguration() {
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "app", "open",
+            "--scenario", "/tmp/game.viewdeck.json",
+            "--native-http"
+        ]))
+        XCTAssertThrowsError(try CLIInvocation.parse([
+            "app", "open",
+            "--inspector", "unknown"
+        ]))
     }
 }
