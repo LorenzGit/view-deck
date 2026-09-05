@@ -149,9 +149,9 @@ final class PreviewMetricsTests: XCTestCase {
         preview.layoutSubtreeIfNeeded()
 
         let webViews = allWebViews(in: preview)
-        XCTAssertTrue(webViews.map(\.frame).contains(CGRect(x: 0, y: 62, width: 444, height: 48)))
-        let page = try XCTUnwrap(webViews.first { $0.frame.height == 850 })
-        XCTAssertEqual(page.frame, CGRect(x: 0, y: 110, width: 444, height: 850))
+        XCTAssertTrue(webViews.map(\.frame).contains(CGRect(x: 0, y: 62, width: 440, height: 48)))
+        let page = try XCTUnwrap(webViews.first { $0.frame.height == 846 })
+        XCTAssertEqual(page.frame, CGRect(x: 0, y: 110, width: 440, height: 846))
         XCTAssertEqual(page.obscuredContentInsets.top, 0)
         XCTAssertEqual(page.obscuredContentInsets.bottom, 0)
     }

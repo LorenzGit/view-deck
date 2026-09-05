@@ -162,6 +162,21 @@ enum PreviewNavigationPolicy {
     }
 }
 
+// AppKit's generated autoresizing constraints mis-size WebKit's layer-hosting
+// view under the scaled preview in the main Auto Layout window. Keep that
+// implementation view in local bounds coordinates; never enlarge the CSS viewport.
+// Match only WebKit's known drawing host so other native overlays are untouched.
+private final class PreviewWebView: WKWebView {
+    override func layout() {
+        super.layout()
+        for contentView in subviews where NSStringFromClass(type(of: contentView)) == "WKFlippedView" {
+            contentView.translatesAutoresizingMaskIntoConstraints = false
+            contentView.frame = bounds
+            contentView.bounds = CGRect(origin: .zero, size: bounds.size)
+        }
+    }
+}
+
 final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private struct AudioActivityInterval {
         let startMilliseconds: Int
@@ -173,8 +188,6 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         qos: .userInitiated
     )
 
-    private static let mobileTrailingOverscan: CGFloat = 4
-    private static let mobileBottomOverscan: CGFloat = 4
     private static let audioMonitorInterval: TimeInterval = 0.02
     private static let audioMutedFlag: UInt = 1
     private static let primaryWebsiteDataStoreIdentifier = UUID(
@@ -354,7 +367,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             name: NativeHTTPBridge.messageHandlerName
         )
         Self.enableDeveloperTools(in: configuration)
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = PreviewWebView(frame: .zero, configuration: configuration)
 
         super.init(frame: .zero)
         qaScriptMessageHandler.receiver = { [weak self] message in
@@ -1366,15 +1379,13 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         )
 
         var pageY = topChrome + headerTopInset
-        let trailingOverscan = profile.mobile ? Self.mobileTrailingOverscan : 0
-        let bottomOverscan = isModernIOSApp ? Self.mobileBottomOverscan : 0
         if let leftWebView {
             leftWebView.isHidden = sideWidths.left == 0
             leftWebView.frame = CGRect(
                 x: 0,
                 y: 0,
                 width: sideWidths.left,
-                height: viewportSize.height + bottomOverscan
+                height: viewportSize.height
             )
         }
         if let rightWebView {
@@ -1382,15 +1393,15 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             rightWebView.frame = CGRect(
                 x: viewportSize.width - sideWidths.right,
                 y: 0,
-                width: sideWidths.right + trailingOverscan,
-                height: viewportSize.height + bottomOverscan
+                width: sideWidths.right,
+                height: viewportSize.height
             )
         }
         if let headerWebView {
             headerWebView.frame = CGRect(
                 x: contentX,
                 y: pageY,
-                width: contentWidth + trailingOverscan,
+                width: contentWidth,
                 height: activeHeaderHeight
             )
             pageY += activeHeaderHeight
@@ -1399,8 +1410,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         webView.frame = CGRect(
             x: pageFrame.minX,
             y: pageFrame.minY,
-            width: pageFrame.width + trailingOverscan,
-            height: pageFrame.height + (footerHTML == nil ? bottomOverscan : 0)
+            width: pageFrame.width,
+            height: pageFrame.height
         )
         webView.bounds = CGRect(origin: .zero, size: webView.frame.size)
         updateNativePageInsets()
@@ -1414,8 +1425,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             footerWebView.frame = CGRect(
                 x: contentX,
                 y: pageY,
-                width: contentWidth + trailingOverscan,
-                height: activeFooterHeight + bottomOverscan
+                width: contentWidth,
+                height: activeFooterHeight
             )
         }
 
@@ -1614,7 +1625,8 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         Self.enableDeveloperTools(in: configuration)
-        let layerView = WKWebView(frame: .zero, configuration: configuration)
+        configuration.userContentController.addUserScript(previewScrollbarScript)
+        let layerView = PreviewWebView(frame: .zero, configuration: configuration)
         layerView.setValue(false, forKey: "drawsBackground")
         if #available(macOS 13.3, *) { layerView.isInspectable = true }
         if silentAudioVerificationEnabled {
@@ -1627,6 +1639,39 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         return layerView
     }
 
+    // Desktop WebKit reserves classic scrollbar gutters even with a mobile user
+    // agent. Transparent web views expose the black viewport through those gutters.
+    // Suppress only the viewport scrollbars; keep scrolling and nested controls intact.
+    private var previewScrollbarScript: WKUserScript {
+        WKUserScript(source: """
+        (() => {
+          const apply = () => {
+            const id = '__viewdeck_viewport_scrollbars';
+            let style = document.getElementById(id);
+            if (!\(profile.mobile ? "true" : "false")) {
+              style?.remove();
+              return;
+            }
+            if (!style) {
+              style = document.createElement('style');
+              style.id = id;
+              document.documentElement.appendChild(style);
+            }
+            style.textContent = ':root { scrollbar-width: none !important; } :root::-webkit-scrollbar { display: none !important; }';
+          };
+          if (document.documentElement) apply();
+          else {
+            const observer = new MutationObserver(() => {
+              if (!document.documentElement) return;
+              observer.disconnect();
+              apply();
+            });
+            observer.observe(document, { childList: true, subtree: true });
+          }
+        })();
+        """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+    }
+
     private func rebuildEnvironment(reload: Bool, updateUserAgent: Bool = true) {
         updateNativePageInsets()
         if updateUserAgent {
@@ -1634,6 +1679,12 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
+        controller.addUserScript(previewScrollbarScript)
+        for layer in [headerWebView, footerWebView, leftWebView, rightWebView].compactMap({ $0 }) {
+            layer.configuration.userContentController.removeAllUserScripts()
+            layer.configuration.userContentController.addUserScript(previewScrollbarScript)
+            layer.evaluateJavaScript(previewScrollbarScript.source)
+        }
         controller.addUserScript(WKUserScript(
             source: Self.diagnosticsBootstrapScript,
             injectionTime: .atDocumentStart,
