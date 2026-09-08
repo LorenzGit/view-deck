@@ -178,6 +178,12 @@ private final class PreviewWebView: WKWebView {
 }
 
 final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
+    override func keyDown(with event: NSEvent) {
+        // WebKit resends keys the page did not consume up the responder chain.
+        // Stop those here to avoid AppKit's alert beep for game controls.
+        // The page and native key equivalents have already had their turn.
+    }
+
     private struct AudioActivityInterval {
         let startMilliseconds: Int
         var endMilliseconds: Int?
