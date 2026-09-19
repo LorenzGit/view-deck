@@ -5,7 +5,7 @@ enum AppInfo {
     static let bundleIdentifier = "studio.viewdeck.native"
 
     static var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.4.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0"
     }
 }
 
