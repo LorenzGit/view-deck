@@ -43,6 +43,60 @@ private final class PreviewNavigationProbe: DevicePreviewDelegate {
 }
 
 final class PreviewMetricsTests: XCTestCase {
+    func testDetachedPlayerInitialSizePreservesDeviceAndFitsMaximum() {
+        let logicalSize = CGSize(width: 440, height: 956)
+        let maximumSize = CGSize(width: 700, height: 800)
+
+        let size = DetachedPlayerWindowLayout.initialContentSize(
+            logicalSize: logicalSize,
+            maximumSize: maximumSize
+        )
+
+        XCTAssertLessThanOrEqual(size.width, maximumSize.width)
+        XCTAssertLessThanOrEqual(size.height, maximumSize.height)
+        let renderedWidth = size.width - DetachedPlayerWindowLayout.padding * 2
+        let renderedHeight = size.height - DetachedPlayerWindowLayout.padding * 2
+        XCTAssertEqual(renderedWidth / renderedHeight, logicalSize.width / logicalSize.height, accuracy: 0.0001)
+    }
+
+    func testDetachedPlayerInitialSizeDoesNotUpscaleDevice() {
+        let logicalSize = CGSize(width: 440, height: 956)
+
+        let size = DetachedPlayerWindowLayout.initialContentSize(
+            logicalSize: logicalSize,
+            maximumSize: CGSize(width: 1_600, height: 1_600)
+        )
+
+        XCTAssertEqual(size.width, logicalSize.width + DetachedPlayerWindowLayout.padding * 2)
+        XCTAssertEqual(size.height, logicalSize.height + DetachedPlayerWindowLayout.padding * 2)
+    }
+
+    func testDetachedPlayerUsesAStandardDiscoverableWindow() {
+        let inspected = expectation(description: "detached player window inspected")
+        var retainedController: DetachedPlayerWindowController?
+
+        DispatchQueue.main.async {
+            let canvas = PreviewCanvasView(profile: BuiltinDevices.all[1])
+            let controller = DetachedPlayerWindowController(canvas: canvas)
+            retainedController = controller
+
+            guard let window = controller.window else {
+                XCTFail("Detached player did not create a window")
+                inspected.fulfill()
+                return
+            }
+            XCTAssertFalse(window is NSPanel)
+            XCTAssertEqual(window.level, .normal)
+            XCTAssertEqual(window.sharingType, .readWrite)
+            XCTAssertFalse(window.isExcludedFromWindowsMenu)
+            controller.dismiss()
+            inspected.fulfill()
+        }
+
+        wait(for: [inspected], timeout: 5)
+        withExtendedLifetime(retainedController) {}
+    }
+
     func testHostedPageViewportMatchesIPhoneSafari() {
         let device = BuiltinDevices.all[0]
         XCTAssertEqual(

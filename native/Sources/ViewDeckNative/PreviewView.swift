@@ -3594,7 +3594,19 @@ private final class PreviewScreenshotCompositor: FlippedView {
 }
 
 final class PreviewCanvasView: FlippedView {
+    enum Presentation {
+        case embedded
+        case detached
+    }
+
     let preview: DevicePreviewView
+    var presentation: Presentation = .embedded {
+        didSet {
+            layer?.backgroundColor = presentation.backgroundColor.cgColor
+            needsDisplay = true
+            needsLayout = true
+        }
+    }
 
     init(
         profile: DeviceProfile,
@@ -3608,7 +3620,7 @@ final class PreviewCanvasView: FlippedView {
         )
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(hex: 0x0d141c).cgColor
+        layer?.backgroundColor = presentation.backgroundColor.cgColor
         addSubview(preview)
         preview.attach(to: self)
     }
@@ -3635,15 +3647,17 @@ final class PreviewCanvasView: FlippedView {
     private func fittedScale() -> CGFloat {
         let logical = preview.logicalSize
         guard logical.width > 0, logical.height > 0 else { return 1 }
+        let padding = presentation.contentPadding
         return min(
-            max(0.12, (bounds.width - 48) / logical.width),
-            max(0.12, (bounds.height - 40) / logical.height),
+            max(0.12, (bounds.width - padding.width) / logical.width),
+            max(0.12, (bounds.height - padding.height) / logical.height),
             1.75
         )
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        guard presentation == .embedded else { return }
         NSColor(hex: 0x0d141c).setFill()
         dirtyRect.fill()
         let grid = NSColor(hex: 0x9ec7e8, alpha: 0.028)
@@ -3657,6 +3671,22 @@ final class PreviewCanvasView: FlippedView {
         }
         path.lineWidth = 0.5
         path.stroke()
+    }
+}
+
+private extension PreviewCanvasView.Presentation {
+    var backgroundColor: NSColor {
+        switch self {
+        case .embedded: NSColor(hex: 0x0d141c)
+        case .detached: .clear
+        }
+    }
+
+    var contentPadding: CGSize {
+        switch self {
+        case .embedded: CGSize(width: 48, height: 40)
+        case .detached: CGSize(width: 56, height: 56)
+        }
     }
 }
 

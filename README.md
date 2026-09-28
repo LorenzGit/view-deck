@@ -24,6 +24,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Deterministic per-preview network shaping for round-trip latency, jitter, upload/download bandwidth, and offline behavior.
 - Opt-in native HTTP requests through `URLSession`, limited to an explicit hostname allowlist.
 - Resizable side panels and a compact, responsive workspace.
+- A detachable, resizable macOS player window with transparent device corners, capture-tool discovery, and state-preserving reattachment.
 - One-click screen-only device screenshots with editable, resizable text boxes that keep wrapped text visible, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
 - A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
 - Record and replay portable QA scenarios containing timed pointer, mouse, form, and keyboard input, critical-moment screenshots, MP4 video, and the complete device configuration.

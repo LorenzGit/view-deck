@@ -94,6 +94,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
     private var inspectorMinimumWidthConstraint: NSLayoutConstraint?
     private var screenshotEditor: ScreenshotEditorController?
     private var agentPromptWindowController: ViewDeckAgentPromptWindowController?
+    private var detachedPlayerWindowController: DetachedPlayerWindowController?
+    private var canvasDockingConstraints: [NSLayoutConstraint] = []
     private var standaloneVideoRecorder: LivePreviewVideoRecorder?
     private var qaRecorder: QAScenarioRecorder?
     private var pendingQARecording: QARecordingRequest?
@@ -224,6 +226,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         networkActivityTimer?.invalidate()
         networkActivityTimer = nil
         standaloneVideoRecorder?.stop()
+        detachedPlayerWindowController?.dismiss()
+        detachedPlayerWindowController = nil
         server.stop()
     }
 
@@ -233,6 +237,14 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     func toggleInspector() {
         setInspectorCollapsed(!inspectorIsCollapsed, persist: true)
+    }
+
+    func togglePlayerDetached() {
+        if detachedPlayerWindowController == nil {
+            detachPlayer()
+        } else {
+            reattachPlayer()
+        }
     }
 
     private func buildInterface() {
@@ -387,21 +399,122 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         toolbar.layer?.zPosition = 20
         center.addSubview(toolbar)
 
+        let placeholder = makeDetachedPlayerPlaceholder()
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        placeholder.wantsLayer = true
+        placeholder.layer?.zPosition = -1
+        center.addSubview(placeholder)
+
         canvas.translatesAutoresizingMaskIntoConstraints = false
         canvas.layer?.zPosition = 0
         center.addSubview(canvas)
         center.addSubview(toolbar, positioned: .above, relativeTo: canvas)
 
+        canvasDockingConstraints = [
+            canvas.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            canvas.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            canvas.bottomAnchor.constraint(equalTo: center.bottomAnchor)
+        ]
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: center.topAnchor),
             toolbar.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: center.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 58),
-            canvas.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            canvas.leadingAnchor.constraint(equalTo: center.leadingAnchor),
-            canvas.trailingAnchor.constraint(equalTo: center.trailingAnchor),
-            canvas.bottomAnchor.constraint(equalTo: center.bottomAnchor)
+            placeholder.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            placeholder.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            placeholder.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            placeholder.bottomAnchor.constraint(equalTo: center.bottomAnchor)
+        ] + canvasDockingConstraints)
+    }
+
+    private func makeDetachedPlayerPlaceholder() -> NSView {
+        let placeholder = FlippedView()
+        placeholder.wantsLayer = true
+        placeholder.layer?.backgroundColor = DeckTheme.panelRaised.cgColor
+
+        let icon = NSImageView(image: NSImage(
+            systemSymbolName: "arrow.down.left.square",
+            accessibilityDescription: "Detached player"
+        ) ?? NSImage())
+        icon.contentTintColor = DeckTheme.muted
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Player detached")
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = DeckTheme.text
+        title.alignment = .center
+
+        let detail = NSTextField(labelWithString: "The live preview is open in its own window.")
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = DeckTheme.muted
+        detail.alignment = .center
+
+        let button = DeckButton(frame: .zero)
+        button.title = "Reattach Player"
+        button.target = self
+        button.action = #selector(reattachPlayerFromPlaceholder)
+        button.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        styleButton(
+            button,
+            fill: DeckTheme.card,
+            border: DeckTheme.lineStrong,
+            text: DeckTheme.secondaryText,
+            radius: 9
+        )
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [icon, title, detail, button])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 9
+        stack.setCustomSpacing(14, after: detail)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        placeholder.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28),
+            button.widthAnchor.constraint(equalToConstant: 142),
+            button.heightAnchor.constraint(equalToConstant: 34),
+            stack.centerXAnchor.constraint(equalTo: placeholder.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: placeholder.centerYAnchor)
         ])
+        return placeholder
+    }
+
+    private func detachPlayer() {
+        guard detachedPlayerWindowController == nil else { return }
+        NSLayoutConstraint.deactivate(canvasDockingConstraints)
+        canvas.removeFromSuperview()
+
+        let controller = DetachedPlayerWindowController(canvas: canvas)
+        controller.requestReattach = { [weak self] in self?.reattachPlayer() }
+        detachedPlayerWindowController = controller
+        toolbarModel.isPlayerDetached = true
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func reattachPlayer() {
+        guard let controller = detachedPlayerWindowController else { return }
+        controller.relinquishCanvas()
+        detachedPlayerWindowController = nil
+
+        canvas.presentation = .embedded
+        canvas.translatesAutoresizingMaskIntoConstraints = false
+        canvas.autoresizingMask = []
+        center.addSubview(canvas)
+        canvas.layer?.zPosition = 0
+        NSLayoutConstraint.activate(canvasDockingConstraints)
+        toolbarModel.isPlayerDetached = false
+        center.layoutSubtreeIfNeeded()
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func reattachPlayerFromPlaceholder() {
+        reattachPlayer()
     }
 
     private func configureToolbarModel() {
@@ -414,6 +527,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         toolbarModel.changeDPR = { [weak self] value in self?.setDPR(value) }
         toolbarModel.toggleSidebar = { [weak self] in self?.toggleSidebar() }
         toolbarModel.toggleInspector = { [weak self] in self?.toggleInspector() }
+        toolbarModel.togglePlayerDetached = { [weak self] in self?.togglePlayerDetached() }
         toolbarModel.rotate = { [weak self] in self?.rotateDevice() }
         toolbarModel.captureScreenshot = { [weak self] in self?.captureScreenshot() }
         toolbarModel.toggleVideoRecording = { [weak self] in self?.toggleVideoRecording() }

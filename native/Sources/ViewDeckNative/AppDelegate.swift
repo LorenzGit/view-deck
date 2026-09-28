@@ -112,11 +112,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         toggleInspectorItem.keyEquivalentModifierMask = [.command, .control]
         toggleInspectorItem.target = self
         viewMenu.addItem(toggleInspectorItem)
+        let toggleDetachedPlayerItem = NSMenuItem(
+            title: "Toggle Detached Player",
+            action: #selector(toggleDetachedPlayer(_:)),
+            keyEquivalent: "d"
+        )
+        toggleDetachedPlayerItem.keyEquivalentModifierMask = [.command, .control]
+        toggleDetachedPlayerItem.target = self
+        viewMenu.addItem(toggleDetachedPlayerItem)
 
         let windowItem = NSMenuItem()
         menu.addItem(windowItem)
         let windowMenu = NSMenu(title: "Window")
         windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
@@ -130,5 +140,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleInspector(_ sender: Any?) {
         mainWindowController?.toggleInspector()
+    }
+
+    @objc private func toggleDetachedPlayer(_ sender: Any?) {
+        mainWindowController?.togglePlayerDetached()
     }
 }

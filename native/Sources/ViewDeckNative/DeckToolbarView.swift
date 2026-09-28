@@ -25,12 +25,14 @@ final class DeckToolbarModel: ObservableObject {
     @Published var qaCheckpointCount = 0
     @Published var isSidebarCollapsed = false
     @Published var isInspectorCollapsed = false
+    @Published var isPlayerDetached = false
     @Published var localProcessState = DeckLocalProcessState.idle
 
     var commitViewport: (Double, Double) -> Void = { _, _ in }
     var changeDPR: (Double) -> Void = { _ in }
     var toggleSidebar: () -> Void = {}
     var toggleInspector: () -> Void = {}
+    var togglePlayerDetached: () -> Void = {}
     var rotate: () -> Void = {}
     var captureScreenshot: () -> Void = {}
     var toggleVideoRecording: () -> Void = {}
@@ -113,6 +115,14 @@ struct DeckToolbarView: View {
                 "sidebar.right",
                 help: model.isInspectorCollapsed ? "Show inspector" : "Hide inspector",
                 action: model.toggleInspector
+            )
+            .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
+
+            browserIcon(
+                model.isPlayerDetached ? "arrow.down.left.square" : "arrow.up.right.square",
+                help: model.isPlayerDetached ? "Reattach player" : "Detach player",
+                action: model.togglePlayerDetached
             )
             .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(ToolbarPalette.line))
