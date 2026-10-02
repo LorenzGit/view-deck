@@ -539,6 +539,8 @@ public enum ViewDeckCommand {
                 "visibleFlag": "--show-preview",
                 "hiddenRendering": "activeOffscreenWebKit",
                 "captureBackend": "windowCompositor",
+                "deviceFrameIncludedByDefault": false,
+                "includeDeviceFrameFlag": "--include-device-frame",
                 "audioModes": ["normal", "verify-silent"],
                 "silentAudioVerificationFlag": "--audio verify-silent"
             ],
@@ -638,6 +640,7 @@ struct CLIInvocation {
     var failOnPageError = false
     var failOnIssues = false
     var showPreview = false
+    var includeDeviceFrame = false
     var audioMode: AudioMode = .normal
     var networkShapingConfiguration = NetworkShapingConfiguration.disabled
     var hasNetworkShapingOverride = false
@@ -729,7 +732,14 @@ struct CLIInvocation {
             if operation == .appOpen, unsupportedAppOptions.contains(argument) {
                 throw CLIError.invalidArgument("\(argument) is unavailable for `viewdeck app open`.")
             }
+            if argument == "--include-device-frame",
+               ![.capture, .inspect, .record, .qaReplay].contains(operation) {
+                throw CLIError.invalidArgument(
+                    "--include-device-frame is available only with capture, inspect, record, or qa replay."
+                )
+            }
             switch argument {
+            case "--include-device-frame": value.includeDeviceFrame = true
             case "--json": value.json = true
             case "--app-path":
                 value.appBundle = CLIPath.url(try requiredValue(for: argument), directory: true)
@@ -1416,6 +1426,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
         )
         if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
+        preview.showsDeviceFrame = invocation.includeDeviceFrame
         if invocation.audioMode == .verifySilent,
            !preview.enableSilentAudioVerification() {
             throw CLIError.audioVerificationUnavailable
@@ -1749,6 +1760,7 @@ private final class CLIPreviewSession: NSObject, DevicePreviewDelegate, DevServe
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
             "captureBackend": "windowCompositor",
+            "deviceFrameIncluded": invocation.includeDeviceFrame,
             "offscreenRenderingEnabled": preview.offscreenRenderingEnabled
         ]
     }
@@ -1859,6 +1871,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
         )
         if let error = preview.networkShapingSetupError { throw error }
         preview.delegate = self
+        preview.showsDeviceFrame = invocation.includeDeviceFrame
         if invocation.audioMode == .verifySilent,
            !preview.enableSilentAudioVerification() {
             throw CLIError.audioVerificationUnavailable
@@ -2196,6 +2209,7 @@ private final class CLIQAReplaySession: NSObject, DevicePreviewDelegate, DevServ
             "visibility": invocation.showPreview ? "visible" : "hidden",
             "windowIntersectsDisplay": window.map(CLIPreviewWindow.intersectsDisplay) ?? false,
             "captureBackend": "windowCompositor",
+            "deviceFrameIncluded": invocation.includeDeviceFrame,
             "offscreenRenderingEnabled": preview.offscreenRenderingEnabled
         ]
     }
@@ -2579,6 +2593,8 @@ private enum CLIHelp {
       --timeout <seconds>            Overall timeout (default: 30)
 
     ARTIFACTS
+      --include-device-frame         Include skin, sensor, status bar, and home indicator
+                                     PNGs, checkpoints, and video are frameless by default
       --output <path>                Main PNG, MP4, or QA scenario output
       --screenshot <image.png>       Also write a screenshot
       --video <video.mp4>            Also write a video

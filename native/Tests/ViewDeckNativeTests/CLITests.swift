@@ -3,6 +3,21 @@ import XCTest
 @testable import ViewDeckCore
 
 final class CLITests: XCTestCase {
+    func testArtifactDeviceFrameIsOptIn() throws {
+        for arguments in [
+            ["capture", "https://example.com", "--output", "/tmp/frame.png"],
+            ["inspect", "https://example.com"],
+            ["record", "https://example.com", "--output", "/tmp/frame.mp4"],
+            ["qa", "replay", "/tmp/frame.viewdeck.json"]
+        ] {
+            XCTAssertFalse(try CLIInvocation.parse(arguments).includeDeviceFrame)
+            XCTAssertTrue(try CLIInvocation.parse(arguments + ["--include-device-frame"]).includeDeviceFrame)
+        }
+        for arguments in [["app", "open"], ["qa", "template"], ["devices"], ["capabilities"]] {
+            XCTAssertThrowsError(try CLIInvocation.parse(arguments + ["--include-device-frame"]))
+        }
+    }
+
     func testCaptureInvocationParsesAgentWorkflowOptions() throws {
         let invocation = try CLIInvocation.parse([
             "capture",

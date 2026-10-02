@@ -4,6 +4,72 @@ import XCTest
 @testable import ViewDeckCore
 
 final class PreviewEdgeTests: XCTestCase {
+    func testFramelessCaptureRemovesSensorAndCornersWithoutChangingGeometry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = directory.appendingPathComponent("index.html")
+        try "<meta name='viewport' content='width=device-width,initial-scale=1'><style>html,body{margin:0;background:#00ff00}</style>"
+            .write(to: fixture, atomically: true, encoding: .utf8)
+
+        for landscape in [false, true] {
+            let done = expectation(description: "framing, landscape=\(landscape)")
+            var retained: (DevicePreviewView, NSWindow)?
+            DispatchQueue.main.async {
+                let profile = BuiltinDevices.all.first { $0.id == "iphone-17-pro-max" }!
+                let preview = DevicePreviewView(profile: profile)
+                preview.landscape = landscape
+                preview.frame = CGRect(origin: .zero, size: preview.logicalSize)
+                let window = CLIPreviewWindow.make(contentView: preview, size: preview.logicalSize, showPreview: false)
+                retained = (preview, window)
+                XCTAssertTrue(preview.enableOffscreenRendering())
+                preview.loadLocalFile(fixture)
+                preview.layoutSubtreeIfNeeded()
+                let originalContentSize = preview.contentViewportSize
+                let sensor = SensorGeometry.frame(
+                    sensor: profile.sensor,
+                    viewportFrame: CGRect(origin: .zero, size: preview.logicalViewportSize),
+                    landscape: landscape
+                )
+                func capture(framed: Bool) {
+                    preview.showsDeviceFrame = framed
+                    preview.layoutSubtreeIfNeeded()
+                    // Allow the window compositor to present the changed native layers.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        preview.captureVideoFrame(scale: 1) { result in
+                            do {
+                                let image = try result.get()
+                                let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+                                let bitmap = NSBitmapImageRep(cgImage: cg)
+                                XCTAssertEqual(bitmap.pixelsWide, Int(preview.logicalViewportSize.width))
+                                XCTAssertEqual(bitmap.pixelsHigh, Int(preview.logicalViewportSize.height))
+                                XCTAssertEqual(preview.contentViewportSize, originalContentSize)
+                                let color = try XCTUnwrap(bitmap.colorAt(x: Int(sensor.midX), y: Int(sensor.midY))?.usingColorSpace(.deviceRGB))
+                                if framed {
+                                    XCTAssertLessThan(color.greenComponent, 0.1, "Sensor must appear when requested")
+                                } else {
+                                    XCTAssertGreaterThan(color.greenComponent, 0.9, "Page must remain visible beneath sensor")
+                                    for (x, y) in [(1, 1), (bitmap.pixelsWide - 2, 1), (1, bitmap.pixelsHigh - 2), (bitmap.pixelsWide - 2, bitmap.pixelsHigh - 2)] {
+                                        let corner = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                                        XCTAssertGreaterThan(corner.greenComponent, 0.9, "Frameless corners must show the page")
+                                    }
+                                }
+                            } catch { XCTFail("\(error)") }
+                            if framed { capture(framed: false) }
+                            else {
+                                window.orderOut(nil)
+                                done.fulfill()
+                            }
+                        }
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { capture(framed: true) }
+            }
+            wait(for: [done], timeout: 15)
+            withExtendedLifetime(retained) {}
+        }
+    }
+
     func testMainWindowScrollablePreviewPaintsBothEdgesAfterResize() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

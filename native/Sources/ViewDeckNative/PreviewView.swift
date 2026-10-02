@@ -298,6 +298,11 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         didSet { pageLayerGeometryDidChange() }
     }
 
+    // Presentation only: keep device geometry and page safe-area behavior intact.
+    var showsDeviceFrame = true {
+        didSet { needsLayout = true }
+    }
+
     private(set) var currentURL: URL?
     private weak var canvas: PreviewCanvasView?
     private let shellClip = FlippedView()
@@ -1284,11 +1289,15 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         super.layout()
         let size = logicalSize
         bounds = CGRect(origin: .zero, size: size)
-        layer?.cornerRadius = profile.shell.radius
+        layer?.cornerRadius = showsDeviceFrame ? profile.shell.radius : 0
+        layer?.borderWidth = showsDeviceFrame ? 1.25 : 0
         shellClip.frame = bounds
         shellClip.bounds = bounds
         let shellBottomBleed: CGFloat = profile.shell.bottom == 0 ? 2 : 0
-        if shellBottomBleed > 0 {
+        if !showsDeviceFrame {
+            shellClip.layer?.mask = nil
+            shellClip.layer?.cornerRadius = 0
+        } else if shellBottomBleed > 0 {
             shellClip.layer?.cornerRadius = 0
             let shellMask = CAShapeLayer()
             shellMask.frame = CGRect(x: 0, y: 0, width: size.width, height: size.height + shellBottomBleed)
@@ -1312,7 +1321,10 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         let shellIsAsymmetric = profile.shell.bottom != profile.shell.top
             || profile.shell.left != profile.shell.top
             || profile.shell.right != profile.shell.top
-        if shellIsAsymmetric {
+        if !showsDeviceFrame {
+            viewportClip.layer?.mask = nil
+            viewportClip.layer?.cornerRadius = 0
+        } else if shellIsAsymmetric {
             // Clip with the outer shell path translated into viewport coordinates so
             // every corner stays concentric with the frame; masksToBounds supplies the
             // intersection with the viewport rect.
@@ -1331,7 +1343,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             viewportClip.layer?.cornerRadius = max(0, profile.shell.radius - largestShellInset + 1)
         }
         let isModernIOSApp = profile.platform == .iOS && !profile.safariChrome && profile.sensor.type == .island
-        viewportClip.layer?.borderWidth = isModernIOSApp ? 0 : 1
+        viewportClip.layer?.borderWidth = !showsDeviceFrame || isModernIOSApp ? 0 : 1
 
         let topChrome: CGFloat = profile.safariChrome
             ? (landscape ? SafariChromeMetrics.landscapeTop : SafariChromeMetrics.portraitTop)
@@ -1376,7 +1388,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         safariBottomFrame.origin.x = contentX
         safariBottomFrame.size.width = contentWidth
         safariBottom.frame = safariBottomFrame
-        appStatusBar.isHidden = profile.platform != .iOS || profile.safariChrome || landscape
+        appStatusBar.isHidden = !showsDeviceFrame || profile.platform != .iOS || profile.safariChrome || landscape
         appStatusBar.frame = CGRect(
             x: contentX,
             y: 0,
@@ -1437,7 +1449,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
 
         let sensor = profile.sensor
-        sensorView.isHidden = sensor.type == .none
+        sensorView.isHidden = !showsDeviceFrame || sensor.type == .none
         if !sensorView.isHidden {
             sensorView.frame = SensorGeometry.frame(
                 sensor: sensor,
@@ -1447,7 +1459,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             sensorView.layer?.cornerRadius = min(sensorView.frame.width, sensorView.frame.height) / 2
         }
 
-        homeIndicator.isHidden = !profile.homeIndicator || profile.safariChrome
+        homeIndicator.isHidden = !showsDeviceFrame || !profile.homeIndicator || profile.safariChrome
         if !homeIndicator.isHidden {
             homeIndicator.frame = HomeIndicatorGeometry.frame(
                 viewportFrame: viewportFrame,

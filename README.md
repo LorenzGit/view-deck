@@ -113,6 +113,8 @@ List the available device profiles:
 dist/native/viewdeck devices list --json
 ```
 
+CLI screenshots, replay checkpoints, and video are frameless by default. They omit the device skin, rounded corners, sensor or Dynamic Island, app status bar, and home indicator. Add `--include-device-frame` to `capture`, `inspect`, `record`, or `qa replay` to restore those decorations. Device dimensions, safe-area layout, Safari chrome, and HTML layers stay the same. Reports expose `preview.deviceFrameIncluded`. The Agent Prompt builder has an **Include device frame in screenshots and video** toggle, off by default.
+
 Start a project's development server, wait for its canvas, take a device screenshot, and write a JSON audit:
 
 ```bash

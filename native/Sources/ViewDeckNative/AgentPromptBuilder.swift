@@ -80,6 +80,7 @@ struct ViewDeckAgentPromptConfiguration: Equatable {
     var showSafeArea: Bool
     var applySafeArea: Bool
     var showPreview = false
+    var includeDeviceFrame = false
     var header: ViewDeckAgentLayerConfiguration
     var footer: ViewDeckAgentLayerConfiguration
     var left: ViewDeckAgentLayerConfiguration
@@ -208,6 +209,10 @@ enum ViewDeckAgentPromptBuilder {
             "- Source: \(sourceDescription(configuration))",
             "- Workflow: \(configuration.workflow.rawValue). \(configuration.workflow.summary)",
             "- Preview: \(visibility)",
+            configuration.includeDeviceFrame
+                ? "- Artifacts: include the device skin, sensor, status bar, and home indicator with `--include-device-frame`."
+                : "- Artifacts: frameless screenshots, checkpoints, and video by default, without the device skin, sensor, status bar, or home indicator. Omit `--include-device-frame`.",
+            "- Artifact framing preserves device dimensions, safe-area layout, Safari chrome, and HTML layers.",
             "",
             "Requested CLI configuration:",
             "```sh",
@@ -280,6 +285,7 @@ enum ViewDeckAgentPromptBuilder {
     private static func directArguments(_ configuration: ViewDeckAgentPromptConfiguration) -> [String] {
         var arguments = sourceArguments(configuration)
         arguments += layoutArguments(configuration)
+        if configuration.includeDeviceFrame { arguments.append("--include-device-frame") }
         arguments += readinessArguments(configuration)
         arguments += previewArguments(configuration)
         arguments += networkArguments(configuration)
@@ -322,6 +328,7 @@ enum ViewDeckAgentPromptBuilder {
 
     private static func replayArguments(_ configuration: ViewDeckAgentPromptConfiguration) -> [String] {
         var arguments = previewArguments(configuration)
+        if configuration.includeDeviceFrame { arguments.append("--include-device-frame") }
         arguments += optionIfPresent("--speed", configuration.replaySpeed)
         arguments += optionIfPresent("--artifacts", outputPath(configuration.checkpointDirectory))
         arguments += optionIfPresent("--screenshot", outputPath(configuration.screenshotOutput))
@@ -683,6 +690,7 @@ private struct ViewDeckAgentPromptView: View {
                         editorTextField("Main PNG output", text: $model.configuration.captureOutput)
                     }
                 }
+                toggle("Include device frame in screenshots and video", isOn: $model.configuration.includeDeviceFrame)
                 editorTextField("Final screenshot (optional)", text: $model.configuration.screenshotOutput)
                 editorTextField("Video output (optional)", text: $model.configuration.videoOutput)
                 editorTextField("JSON report", text: $model.configuration.reportOutput)

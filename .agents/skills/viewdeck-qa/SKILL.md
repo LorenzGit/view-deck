@@ -95,6 +95,24 @@ frames than the requested FPS when compositor capture cannot keep up; inspect
 actual MP4 duration and representative frames rather than requiring every
 scheduled frame.
 
+## Choose artifact framing
+
+CLI screenshots, replay checkpoint PNGs, and video are frameless by default.
+They omit the device skin, rounded corners, sensor or Dynamic Island, app
+status bar, and home indicator. Keep this default for visual QA.
+
+When the user requests device decorations, add `--include-device-frame` to
+`capture`, `inspect`, `record`, or `qa replay`. For authored scenarios, put the
+flag on `qa replay`, not `qa template`; framing is a per-run presentation
+option and does not change the scenario. The Agent Prompt builder exposes the
+same option as **Include device frame in screenshots and video**, off by default.
+
+Framing preserves device dimensions, orientation, safe-area layout, Safari
+chrome, and HTML layers. Verify `preview.deviceFrameIncluded` is `false` for
+default captures or `true` when the flag was requested, and inspect the PNGs.
+Check `capabilities --json` for `preview.includeDeviceFrameFlag` before relying
+on this behavior with an older executable.
+
 ## Choose and verify orientation
 
 Portrait is the CLI default. When the requested experience is landscape, pass

@@ -2,6 +2,23 @@ import XCTest
 @testable import ViewDeckCore
 
 final class AgentPromptBuilderTests: XCTestCase {
+    func testDeviceFrameIsOptInAndOnlyAddedToArtifactCommands() throws {
+        for workflow in ViewDeckAgentWorkflow.allCases {
+            var configuration = try baseConfiguration()
+            configuration.workflow = workflow
+            XCTAssertFalse(ViewDeckAgentPromptBuilder.commandDraft(configuration).contains("--include-device-frame"))
+            XCTAssertTrue(ViewDeckAgentPromptBuilder.prompt(for: configuration).contains("frameless screenshots"))
+            configuration.includeDeviceFrame = true
+            let command = ViewDeckAgentPromptBuilder.commandDraft(configuration)
+            XCTAssertEqual(command.components(separatedBy: "--include-device-frame").count - 1, 1)
+            if workflow == .qaScenario {
+                let template = command.components(separatedBy: "# Author")[0]
+                XCTAssertFalse(template.contains("--include-device-frame"))
+            }
+            XCTAssertTrue(ViewDeckAgentPromptBuilder.prompt(for: configuration).contains("include the device skin"))
+        }
+    }
+
     func testInitialConfigurationPreservesClickedDeviceSetup() throws {
         let profile = try XCTUnwrap(BuiltinDevices.all.first(where: { $0.id == "iphone-16-pro" }))
         let setup = CustomDeviceSetup(
