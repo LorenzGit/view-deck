@@ -8,6 +8,7 @@ struct ViewDeckPreferences {
         static let projectFolder = "viewdeck.native.project-folder"
         static let projectHistory = "viewdeck.native.project-history"
         static let projectDeviceHistory = "viewdeck.native.project-device-history"
+        static let projectOrientationHistory = "viewdeck.native.project-orientation-history"
         static let networkShaping = "viewdeck.native.network-shaping"
         static let nativeHTTP = "viewdeck.native.native-http"
     }
@@ -136,10 +137,19 @@ struct ViewDeckPreferences {
         return devices[folder.standardizedFileURL.path] as? String
     }
 
-    func rememberDevice(_ deviceID: String, forProject folder: URL) {
+    func lastLandscape(forProject folder: URL) -> Bool? {
+        let orientations = defaults.dictionary(forKey: Key.projectOrientationHistory) ?? [:]
+        return orientations[folder.standardizedFileURL.path] as? Bool
+    }
+
+    func rememberDevice(_ deviceID: String, landscape: Bool, forProject folder: URL) {
+        let path = folder.standardizedFileURL.path
         var devices = defaults.dictionary(forKey: Key.projectDeviceHistory) ?? [:]
-        devices[folder.standardizedFileURL.path] = deviceID
+        devices[path] = deviceID
         defaults.set(devices, forKey: Key.projectDeviceHistory)
+        var orientations = defaults.dictionary(forKey: Key.projectOrientationHistory) ?? [:]
+        orientations[path] = landscape
+        defaults.set(orientations, forKey: Key.projectOrientationHistory)
     }
 
     private func recordProjectSelection(_ folder: URL) {

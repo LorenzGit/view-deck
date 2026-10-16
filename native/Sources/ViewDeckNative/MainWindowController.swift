@@ -176,8 +176,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     let canvas: PreviewCanvasView
 
-    init() {
-        let preferences = ViewDeckPreferences()
+    init(preferences: ViewDeckPreferences = ViewDeckPreferences()) {
         let initialCustomSetups = CustomDeviceSetupStore.load()
         self.preferences = preferences
         customSetups = initialCustomSetups
@@ -1627,11 +1626,12 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         return menu
     }
 
-    private func selectDevice(at index: Int) {
+    private func selectDevice(at index: Int, landscape: Bool? = nil) {
         guard devices.indices.contains(index) else { return }
         selectedIndex = index
         let setup = deviceSetup(at: index)
         applyDeviceSetup(setup)
+        if let landscape { canvas.preview.landscape = landscape }
         widthField.doubleValue = setup.profile.viewport.width
         heightField.doubleValue = setup.profile.viewport.height
         toolbarModel.width = Int(setup.profile.viewport.width).description
@@ -1741,6 +1741,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         let landscape = sender.selectedSegment == 1
         guard canvas.preview.landscape != landscape else { return }
         canvas.preview.landscape = landscape
+        rememberCurrentDeviceForSelectedProject()
         updateStatus()
         rebuildInspector()
     }
@@ -1820,6 +1821,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     @objc private func rotateDevice() {
         canvas.preview.landscape.toggle()
+        rememberCurrentDeviceForSelectedProject()
         updateStatus(); rebuildInspector()
     }
 
@@ -2279,7 +2281,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
             preferences.selectedDeviceID = configuration.profile.id
             selectedIndex = devices.firstIndex(where: { $0.id == configuration.profile.id }) ?? -1
             if let projectFolder {
-                preferences.rememberDevice(configuration.profile.id, forProject: projectFolder)
+                preferences.rememberDevice(
+                    configuration.profile.id,
+                    landscape: canvas.preview.landscape,
+                    forProject: projectFolder
+                )
             }
         }
 
@@ -3117,9 +3123,8 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         projectFolder = folder
         if persist { preferences.projectFolderURL = folder }
         if let deviceID = preferences.lastDeviceID(forProject: folder),
-           let deviceIndex = devices.firstIndex(where: { $0.id == deviceID }),
-           deviceIndex != selectedIndex {
-            selectDevice(at: deviceIndex)
+           let deviceIndex = devices.firstIndex(where: { $0.id == deviceID }) {
+            selectDevice(at: deviceIndex, landscape: preferences.lastLandscape(forProject: folder))
         }
         projectButton.title = folder.lastPathComponent
         projectButton.toolTip = "Project folder: \(folder.path)"
@@ -3194,10 +3199,9 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.allowedContentTypes = [.html]
         panel.directoryURL = projectFolder
         guard panel.runModal() == .OK, let file = panel.url else { return }
+        setProjectFolder(file.deletingLastPathComponent())
+        launchMode = .staticHTML
         staticHTMLFile = file
-        projectFolder = file.deletingLastPathComponent().standardizedFileURL
-        preferences.projectFolderURL = projectFolder
-        projectButton.title = projectFolder?.lastPathComponent ?? "Choose local project"
         previewStaticHTML(file)
         rebuildInspector()
     }
@@ -3280,7 +3284,11 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
 
     private func rememberCurrentDeviceForSelectedProject() {
         guard let projectFolder, devices.indices.contains(selectedIndex) else { return }
-        preferences.rememberDevice(devices[selectedIndex].id, forProject: projectFolder)
+        preferences.rememberDevice(
+            devices[selectedIndex].id,
+            landscape: canvas.preview.landscape,
+            forProject: projectFolder
+        )
     }
 
     @objc private func addCurrentDeviceToCustom() {

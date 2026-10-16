@@ -177,17 +177,65 @@ final class ViewDeckPreferencesTests: XCTestCase {
         )
     }
 
-    func testRemembersLastDeviceForEachProject() throws {
+    func testRemembersLastDeviceAndOrientationForEachProjectAcrossReloads() throws {
         let folders = try makeTemporaryProjectFolders(count: 2)
         defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
         let preferences = ViewDeckPreferences(defaults: defaults)
 
-        preferences.rememberDevice("iphone-17-pro-max", forProject: folders[0])
-        preferences.rememberDevice("ipad-pro-13", forProject: folders[1])
-        preferences.rememberDevice("macbook-pro-16", forProject: folders[0])
+        preferences.rememberDevice("iphone-17-pro-max", landscape: false, forProject: folders[0])
+        preferences.rememberDevice("ipad-pro-13", landscape: false, forProject: folders[1])
+        preferences.rememberDevice("macbook-pro-16", landscape: true, forProject: folders[0])
 
-        XCTAssertEqual(preferences.lastDeviceID(forProject: folders[0]), "macbook-pro-16")
-        XCTAssertEqual(preferences.lastDeviceID(forProject: folders[1]), "ipad-pro-13")
+        let restored = ViewDeckPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+        XCTAssertEqual(restored.lastDeviceID(forProject: folders[0]), "macbook-pro-16")
+        XCTAssertEqual(restored.lastLandscape(forProject: folders[0]), true)
+        XCTAssertEqual(restored.lastDeviceID(forProject: folders[1]), "ipad-pro-13")
+        XCTAssertEqual(restored.lastLandscape(forProject: folders[1]), false)
+    }
+
+    func testProjectsUsingTheSameDeviceKeepIndependentOrientations() throws {
+        let folders = try makeTemporaryProjectFolders(count: 2)
+        defer { try? FileManager.default.removeItem(at: folders[0].deletingLastPathComponent()) }
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        preferences.rememberDevice("iphone-17-pro-max", landscape: true, forProject: folders[0])
+        preferences.rememberDevice("iphone-17-pro-max", landscape: false, forProject: folders[1])
+        preferences.rememberDevice("iphone-17-pro-max", landscape: false, forProject: folders[0])
+
+        XCTAssertEqual(preferences.lastLandscape(forProject: folders[0]), false)
+        XCTAssertEqual(preferences.lastLandscape(forProject: folders[1]), false)
+        preferences.rememberDevice("iphone-17-pro-max", landscape: true, forProject: folders[1])
+        XCTAssertEqual(preferences.lastLandscape(forProject: folders[0]), false)
+        XCTAssertEqual(preferences.lastLandscape(forProject: folders[1]), true)
+    }
+
+    func testLegacyDeviceHistoryHasNoSavedOrientationUntilUpdated() throws {
+        let folder = try makeTemporaryProjectFolders(count: 1)[0]
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        defaults.set(
+            [folder.standardizedFileURL.path: "iphone-17-pro-max"],
+            forKey: "viewdeck.native.project-device-history"
+        )
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.lastDeviceID(forProject: folder), "iphone-17-pro-max")
+        XCTAssertNil(preferences.lastLandscape(forProject: folder))
+
+        preferences.rememberDevice("iphone-17-pro-max", landscape: true, forProject: folder)
+
+        XCTAssertEqual(preferences.lastLandscape(forProject: folder), true)
+    }
+
+    func testDeviceHistoryUsesStandardizedProjectPaths() throws {
+        let folder = try makeTemporaryProjectFolders(count: 1)[0]
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        let equivalentFolder = folder.appendingPathComponent("../project-0", isDirectory: true)
+        let preferences = ViewDeckPreferences(defaults: defaults)
+
+        preferences.rememberDevice("iphone-17-pro-max", landscape: true, forProject: equivalentFolder)
+
+        XCTAssertEqual(preferences.lastDeviceID(forProject: folder), "iphone-17-pro-max")
+        XCTAssertEqual(preferences.lastLandscape(forProject: folder), true)
     }
 
     private func makeTemporaryProjectFolders(count: Int) throws -> [URL] {
