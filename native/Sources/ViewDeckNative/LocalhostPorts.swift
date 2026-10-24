@@ -17,6 +17,7 @@ struct LocalhostProcess: Equatable, Identifiable {
     let parentCommand: String?
     let workingDirectory: String?
     let endpoints: [LocalhostEndpoint]
+    var detectedHTTPPorts: Set<Int> = []
 
     var id: pid_t { pid }
 
@@ -29,10 +30,20 @@ struct LocalhostProcess: Equatable, Identifiable {
               let workingDirectory,
               !workingDirectory.isEmpty else { return processName }
         let folderName = URL(fileURLWithPath: workingDirectory).lastPathComponent
-        return folderName.isEmpty ? processName : folderName
+        return folderName.isEmpty || folderName == "/" ? processName : folderName
     }
 
     var isDevelopmentServer: Bool {
+        !openablePorts.isEmpty
+    }
+
+    var openablePorts: [Int] {
+        ports.filter {
+            detectedHTTPPorts.contains($0) || (detectedHTTPPorts.isEmpty && matchesDevelopmentCommand)
+        }
+    }
+
+    private var matchesDevelopmentCommand: Bool {
         let description = [processName, command, parentCommand, workingDirectory]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -77,6 +88,7 @@ enum LocalhostPortScanner {
         let processTable = parseProcessTable(processOutput)
         let grouped = Dictionary(grouping: listeners, by: \.pid)
 
+        let httpPorts = LocalhostHTTPProbe.detect(ports: Set(listeners.map(\.endpoint.port)))
         return grouped.map { pid, records in
             let process = processTable[pid]
             let parent = process.flatMap { processTable[$0.parentPID] }
@@ -89,7 +101,8 @@ enum LocalhostPortScanner {
                 workingDirectory: workingDirectory(for: pid),
                 endpoints: Array(Set(records.map(\.endpoint))).sorted {
                     $0.port == $1.port ? $0.address < $1.address : $0.port < $1.port
-                }
+                },
+                detectedHTTPPorts: httpPorts.intersection(records.map(\.endpoint.port))
             )
         }
         .sorted {
@@ -181,6 +194,56 @@ enum LocalhostPortScanner {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
+// A HEAD response identifies custom web servers without relying on their
+// executable or script names. Probe in parallel so non-HTTP listeners cannot
+// stall the port list, and never follow redirects away from localhost.
+final class LocalhostHTTPProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var detectedPorts: Set<Int> = []
+
+    static func detect(ports: Set<Int>, timeout: TimeInterval = 1) -> Set<Int> {
+        guard !ports.isEmpty else { return [] }
+        let probe = LocalhostHTTPProbe()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        configuration.connectionProxyDictionary = [:]
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        let session = URLSession(configuration: configuration, delegate: probe, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let group = DispatchGroup()
+        for port in ports {
+            guard let url = URL(string: "http://localhost:\(port)/") else { continue }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                     timeoutInterval: timeout)
+            request.httpMethod = "HEAD"
+            group.enter()
+            session.dataTask(with: request) { _, response, _ in
+                if response is HTTPURLResponse {
+                    probe.lock.lock()
+                    probe.detectedPorts.insert(port)
+                    probe.lock.unlock()
+                }
+                group.leave()
+            }.resume()
+        }
+        _ = group.wait(timeout: .now() + timeout + 0.5)
+        probe.lock.lock()
+        defer { probe.lock.unlock() }
+        return probe.detectedPorts
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 

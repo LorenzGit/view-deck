@@ -4,6 +4,69 @@ import XCTest
 @testable import ViewDeckCore
 
 final class PreviewEdgeTests: XCTestCase {
+    @MainActor
+    private func renderedWindowImage(_ window: NSWindow) throws -> CGImage {
+        try XCTUnwrap(CGWindowListCreateImage(
+            .null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+            [.boundsIgnoreFraming, .bestResolution]
+        ))
+    }
+
+    @MainActor
+    func testGPUCanvasDoesNotBleedAcrossTopBezelAtFractionalScale() async throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("Requires WebGPU") }
+        _ = NSApplication.shared
+        let profile = try XCTUnwrap(BuiltinDevices.all.first { $0.id == "iphone-16-pro" })
+        let canvas = PreviewCanvasView(profile: profile)
+        let preview = canvas.preview
+        // This size puts the display's top edge on a half backing pixel.
+        let window = CLIPreviewWindow.make(contentView: canvas, size: CGSize(width: 800, height: 803), showPreview: false)
+        defer { window.close() }
+        canvas.layoutSubtreeIfNeeded()
+        XCTAssertTrue(preview.enableOffscreenRendering())
+        func findWebView(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            return view.subviews.compactMap { findWebView($0) }.first
+        }
+        let web = try XCTUnwrap(findWebView(preview))
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/webgpu/index.html")
+        preview.loadLocalFile(fixture)
+        var ready = false
+        for _ in 0..<100 {
+            if (try? await web.evaluateJavaScript("document.documentElement.dataset.webgpuStatus")) as? String == "ready" {
+                ready = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(ready, "The GPU fixture must render before checking the bezel")
+        for restoreAfterRecording in [false, true] {
+            if restoreAfterRecording {
+                preview.showsDeviceFrame = false
+                preview.layoutSubtreeIfNeeded()
+                preview.showsDeviceFrame = true
+                preview.layoutSubtreeIfNeeded()
+            }
+            CATransaction.flush()
+            try await Task.sleep(for: .milliseconds(150))
+            let image = try renderedWindowImage(window)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            let scaleX = CGFloat(image.width) / window.frame.width
+            let scaleY = CGFloat(image.height) / window.frame.height
+            for localX: CGFloat in [35, 40, 43] {
+                let point = preview.convert(CGPoint(x: localX, y: profile.shell.top), to: nil)
+                let x = Int((point.x * scaleX).rounded(.down))
+                let y = Int(((window.frame.height - point.y) * scaleY).rounded(.down))
+                for row in (y - 1)...(y + 1) {
+                    let color = try XCTUnwrap(bitmap.colorAt(x: x, y: row)?.usingColorSpace(.deviceRGB))
+                    XCTAssertLessThan(max(color.redComponent, color.greenComponent, color.blueComponent), 0.24,
+                                      "GPU content must not leave a bright line in the top bezel")
+                }
+            }
+        }
+    }
+
     func testFramelessCaptureRemovesSensorAndCornersWithoutChangingGeometry() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

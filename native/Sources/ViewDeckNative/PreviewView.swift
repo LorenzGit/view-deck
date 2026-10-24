@@ -386,7 +386,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         }
         wantsLayer = true
         layer?.backgroundColor = NSColor(hex: 0x111419).cgColor
-        layer?.borderColor = NSColor(hex: 0x6e7680).cgColor
+        layer?.borderColor = NSColor(hex: 0x30363e).cgColor
         layer?.borderWidth = 1.25
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.72
@@ -1339,8 +1339,20 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
             mask.path = shellMaskPath(size: size, bottomBleed: shellBottomBleed)
             viewportClip.layer?.mask = mask
         } else {
-            viewportClip.layer?.mask = nil
-            viewportClip.layer?.cornerRadius = max(0, profile.shell.radius - largestShellInset + 1)
+            // An explicit mask also clips GPU-backed WebKit surfaces at
+            // fractional preview scales. CALayer's implicit corner clipping
+            // can otherwise leave a horizontal edge across the top bezel.
+            viewportClip.layer?.cornerRadius = 0
+            let radius = max(0, profile.shell.radius - largestShellInset + 1)
+            let mask = CAShapeLayer()
+            mask.frame = viewportClip.bounds
+            mask.path = CGPath(
+                roundedRect: viewportClip.bounds,
+                cornerWidth: radius,
+                cornerHeight: radius,
+                transform: nil
+            )
+            viewportClip.layer?.mask = mask
         }
         let isModernIOSApp = profile.platform == .iOS && !profile.safariChrome && profile.sensor.type == .island
         viewportClip.layer?.borderWidth = !showsDeviceFrame || isModernIOSApp ? 0 : 1

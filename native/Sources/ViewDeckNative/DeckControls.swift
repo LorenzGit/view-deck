@@ -51,10 +51,51 @@ final class DeckFillStackView: NSStackView {
 final class DeckSegmentedControl: NSSegmentedControl {
     var selectionChanged: (() -> Void)?
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // The native focus ring follows the cell's layout rather than our tabs.
+        // Match the focus styling of the other custom Deck controls.
+        focusRingType = .none
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override var selectedSegment: Int {
         didSet {
             needsDisplay = true
             if oldValue != selectedSegment { selectionChanged?() }
+        }
+    }
+
+    private func segmentRect(at index: Int) -> NSRect {
+        let width = bounds.width / CGFloat(segmentCount)
+        return NSRect(x: bounds.minX + CGFloat(index) * width, y: bounds.minY,
+                      width: width, height: bounds.height)
+    }
+
+    private func segment(at point: NSPoint) -> Int? {
+        guard segmentCount > 0, bounds.width > 0, bounds.contains(point) else { return nil }
+        return (0..<segmentCount).first { segmentRect(at: $0).contains(point) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard trackingMode == .selectOne else {
+            super.mouseDown(with: event)
+            return
+        }
+        // The native cell uses its own label-sized hit regions. Track against
+        // the same equal-width rectangles used by our custom drawing instead.
+        guard isEnabled, let window,
+              let index = segment(at: convert(event.locationInWindow, from: nil)),
+              isEnabled(forSegment: index) else { return }
+        window.makeFirstResponder(self)
+        while let tracked = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            guard tracked.type == .leftMouseUp else { continue }
+            guard isEnabled, isEnabled(forSegment: index),
+                  segment(at: convert(tracked.locationInWindow, from: nil)) == index else { return }
+            selectedSegment = index
+            sendAction(action, to: target)
+            return
         }
     }
 
@@ -63,9 +104,8 @@ final class DeckSegmentedControl: NSSegmentedControl {
         bounds.fill()
 
         guard segmentCount > 0 else { return }
-        let segmentWidth = bounds.width / CGFloat(segmentCount)
         for index in 0..<segmentCount {
-            let rect = CGRect(x: CGFloat(index) * segmentWidth, y: 0, width: segmentWidth, height: bounds.height)
+            let rect = segmentRect(at: index)
             let isSelected = index == selectedSegment
             if isSelected {
                 let selection = NSBezierPath(

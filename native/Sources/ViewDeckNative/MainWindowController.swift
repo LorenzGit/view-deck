@@ -1247,15 +1247,16 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         command.toolTip = process.command
         views.append(command)
 
-        let safePorts = process.ports.filter { !collisions.contains($0) }
-        if process.isDevelopmentServer, safePorts.count == 1, let port = safePorts.first {
+        let safePorts = process.openablePorts.filter { !collisions.contains($0) }
+        for port in safePorts {
             let open = makeWideButton("Open localhost:\(port)", action: #selector(openLocalhostPort(_:)))
             open.tag = port
             open.image = NSImage(systemSymbolName: "arrow.up.right.square", accessibilityDescription: nil)
             open.imagePosition = .imageLeading
             open.toolTip = "Load http://localhost:\(port)/ in the preview"
             views.append(open)
-        } else if process.ports.contains(where: collisions.contains) {
+        }
+        if process.ports.contains(where: collisions.contains) {
             let collision = helpText("Resolve the collision before opening this port.")
             collision.textColor = DeckTheme.danger
             views.append(collision)
@@ -1919,13 +1920,7 @@ final class MainWindowController: NSWindowController, DevicePreviewDelegate, Dev
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let outputURL = panel.url else { return }
 
-        let recorder = LivePreviewVideoRecorder(
-            outputURL: outputURL,
-            duration: nil,
-            framesPerSecond: 30,
-            captureScale: 1,
-            overwrite: true
-        )
+        let recorder = LivePreviewVideoRecorder.uiRecording(outputURL: outputURL, preview: canvas.preview)
         standaloneVideoRecorder = recorder
         toolbarModel.videoCaptureState = .recording
         recorder.record(preview: canvas.preview) { [weak self, weak recorder] result in

@@ -111,6 +111,29 @@ enum LivePreviewVideoFrameSource {
     case webkitSnapshot
 }
 
+enum LivePreviewVideoQuality {
+    case standard
+    case high
+
+    func compressionProperties(width: Int, height: Int, framesPerSecond: Int) -> [String: Any] {
+        switch self {
+        case .standard:
+            return [
+                AVVideoAverageBitRateKey: min(24_000_000, max(2_000_000, width * height * 5)),
+                AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2
+            ]
+        case .high:
+            let bitrate = Int(Double(width) * Double(height) * Double(framesPerSecond) * 0.32)
+            return [
+                AVVideoAverageBitRateKey: min(80_000_000, max(8_000_000, bitrate)),
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoExpectedSourceFrameRateKey: framesPerSecond,
+                AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2
+            ]
+        }
+    }
+}
+
 final class LivePreviewVideoRecorder {
     private let outputURL: URL
     private let duration: TimeInterval?
@@ -118,6 +141,9 @@ final class LivePreviewVideoRecorder {
     private let captureScale: CGFloat
     private let overwrite: Bool
     private let frameSource: LivePreviewVideoFrameSource
+    private let quality: LivePreviewVideoQuality
+    private let includeDeviceFrame: Bool?
+    private var originalDeviceFrameVisibility: Bool?
     private let encodingQueue = DispatchQueue(
         label: "studio.viewdeck.live-video-encoding",
         qos: .userInitiated
@@ -145,7 +171,9 @@ final class LivePreviewVideoRecorder {
         framesPerSecond: Int,
         captureScale: CGFloat,
         overwrite: Bool,
-        frameSource: LivePreviewVideoFrameSource = .windowCompositor
+        frameSource: LivePreviewVideoFrameSource = .windowCompositor,
+        quality: LivePreviewVideoQuality = .standard,
+        includeDeviceFrame: Bool? = nil
     ) {
         self.outputURL = outputURL
         self.duration = duration
@@ -153,6 +181,20 @@ final class LivePreviewVideoRecorder {
         self.captureScale = captureScale
         self.overwrite = overwrite
         self.frameSource = frameSource
+        self.quality = quality
+        self.includeDeviceFrame = includeDeviceFrame
+    }
+
+    static func uiRecording(outputURL: URL, preview: DevicePreviewView) -> LivePreviewVideoRecorder {
+        LivePreviewVideoRecorder(
+            outputURL: outputURL,
+            duration: nil,
+            framesPerSecond: 30,
+            captureScale: min(3, max(1, preview.profile.viewport.dpr)),
+            overwrite: true,
+            quality: .high,
+            includeDeviceFrame: false
+        )
     }
 
     func record(
@@ -164,6 +206,22 @@ final class LivePreviewVideoRecorder {
         }
         self.preview = preview
         self.completion = completion
+        if let includeDeviceFrame, preview.showsDeviceFrame != includeDeviceFrame {
+            originalDeviceFrameVisibility = preview.showsDeviceFrame
+            preview.showsDeviceFrame = includeDeviceFrame
+            preview.layoutSubtreeIfNeeded()
+            CATransaction.flush()
+            // Wait for the window compositor to present the frameless layers
+            // before capturing the first frame.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.beginCapturing()
+            }
+        } else {
+            beginCapturing()
+        }
+    }
+
+    private func beginCapturing() {
         recordStartedAt = Date()
         scheduleNextFrame()
     }
@@ -259,15 +317,13 @@ final class LivePreviewVideoRecorder {
         let width = Self.even(representation.pixelsWide)
         let height = Self.even(representation.pixelsHigh)
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        let bitrate = min(24_000_000, max(2_000_000, width * height * 5))
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: bitrate,
-                AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2
-            ]
+            AVVideoCompressionPropertiesKey: quality.compressionProperties(
+                width: width, height: height, framesPerSecond: framesPerSecond
+            )
         ]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = duration == nil
@@ -358,6 +414,11 @@ final class LivePreviewVideoRecorder {
     private func complete(_ result: Result<Void, Error>) {
         guard let completion else { return }
         self.completion = nil
+        if let originalDeviceFrameVisibility {
+            preview?.showsDeviceFrame = originalDeviceFrameVisibility
+            preview?.layoutSubtreeIfNeeded()
+            self.originalDeviceFrameVisibility = nil
+        }
         completion(result)
     }
 
