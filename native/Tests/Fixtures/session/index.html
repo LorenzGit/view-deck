@@ -1,0 +1,36 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ViewDeck persistent session fixture</title>
+<style>
+  html,body{margin:0;background:#e8f5e9;color:#123;font:16px sans-serif}
+  body{height:2200px;padding:16px;box-sizing:border-box}
+  button,input{display:block;margin:12px 0;padding:12px;font:inherit}
+  canvas{position:absolute;left:0;top:240px;width:220px;height:140px;background:#336699;touch-action:none}
+</style>
+<button id="increment">Increment</button>
+<output id="count"></output>
+<input id="name" aria-label="Player name">
+<canvas id="game" width="220" height="140" tabindex="0"></canvas>
+<script>
+  window.count = Number(localStorage.getItem('session-count') || 0);
+  window.events = [];
+  window.dragPoints = [];
+  document.querySelector('#count').textContent = count;
+  document.querySelector('#increment').onclick = event => {
+    count++;
+    localStorage.setItem('session-count', String(count));
+    document.querySelector('#count').textContent = count;
+    events.push({type: 'click', trusted: event.isTrusted});
+  };
+  for (const type of ['keydown','keyup','input']) {
+    addEventListener(type, event => events.push({type, key:event.key, trusted:event.isTrusted}));
+  }
+  const game = document.querySelector('#game');
+  for (const type of ['pointerdown','pointermove','pointerup']) {
+    game.addEventListener(type, event => {
+      dragPoints.push({type,x:event.clientX,y:event.clientY,movementX:event.movementX,buttons:event.buttons,trusted:event.isTrusted});
+    });
+  }
+  game.getContext('2d').fillStyle = '#336699';
+  game.getContext('2d').fillRect(0,0,220,140);
+</script>

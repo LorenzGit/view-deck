@@ -14,6 +14,7 @@ public enum ViewDeckCommand {
     }
 
     static func run(arguments: [String]) -> Int32 {
+        if arguments.first == "session" { return SessionCommand.run(Array(arguments.dropFirst())) }
         do {
             let invocation = try CLIInvocation.parse(arguments)
             switch invocation.operation {
@@ -500,7 +501,18 @@ public enum ViewDeckCommand {
             "schemaVersion": 1,
             "commands": [
                 "devices", "app open", "capture", "inspect", "record",
-                "qa replay", "qa template", "capabilities"
+                "qa replay", "qa template", "session", "capabilities"
+            ],
+            "sessions": [
+                "persistent": true,
+                "defaultVisibility": "hidden",
+                "audio": "muted",
+                "storage": "isolatedEphemeralSession",
+                "transport": "privateUserFileRPC",
+                "nativeInput": ["click", "pointer", "drag", "key", "type"],
+                "commands": ["start", "list", "status", "screenshot", "inspect", "click", "pointer",
+                             "drag", "key", "type", "scroll", "eval", "wait", "navigate", "reload",
+                             "configure", "record start", "record stop", "request", "stop"]
             ],
             "interactiveApp": [
                 "openAndConfigure": true,
@@ -2533,6 +2545,7 @@ private enum CLIHelp {
     USAGE
       viewdeck devices list [--json]
       viewdeck capabilities [--json]
+      viewdeck session help
       viewdeck app open [<url>] [options]
       viewdeck capture <url> --output <image.png> [options]
       viewdeck inspect <url> [--report <report.json>] [options]

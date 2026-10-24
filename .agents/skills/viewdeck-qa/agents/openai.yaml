@@ -1,4 +1,4 @@
 interface:
   display_name: "ViewDeck QA"
-  short_description: "Run visual QA for web games with ViewDeck"
-  default_prompt: "Use $viewdeck-qa to create and replay a deterministic QA scenario for this web game. Keep screenshots, checkpoints, and video frameless by default. Add --include-device-frame to capture or replay only when device decorations are requested."
+  short_description: "Explore and test web games with hidden CLI sessions"
+  default_prompt: "Use $viewdeck-qa and the ViewDeck CLI. Choose a persistent hidden session for exploratory interaction, or a QA scenario for repeatable tests. Keep captures frameless unless device decorations are requested, inspect the saved artifacts, and stop sessions when finished."

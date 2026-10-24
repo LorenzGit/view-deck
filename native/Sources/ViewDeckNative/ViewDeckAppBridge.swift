@@ -68,7 +68,7 @@ enum ViewDeckAppBundleLocator {
                 : nil
         }
 
-        let sibling = executableURL.standardizedFileURL
+        let sibling = executableURL.standardizedFileURL.resolvingSymlinksInPath()
             .deletingLastPathComponent()
             .appendingPathComponent("ViewDeck.app", isDirectory: true)
         if isViewDeckApp(sibling, fileManager: fileManager) { return sibling }

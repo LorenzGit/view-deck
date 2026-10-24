@@ -27,6 +27,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - A detachable, resizable macOS player window with transparent device corners, capture-tool discovery, and state-preserving reattachment.
 - One-click screen-only device screenshots with editable, resizable text boxes that keep wrapped text visible, restylable drawings and arrows, and tightly cropped clipboard or PNG exports on the dark canvas background.
 - A machine-readable CLI for deterministic screenshots, MP4 recordings, page diagnostics, safe-area audits, and managed local-server runs.
+- Persistent hidden CLI sessions with native clicks, dragging, keyboard input, typing, JavaScript evaluation, screenshots, and video without desktop automation.
 - Record and replay portable QA scenarios containing timed pointer, mouse, form, and keyboard input, critical-moment screenshots, MP4 video, and the complete device configuration.
 
 ## Requirements
@@ -35,7 +36,7 @@ ViewDeck is a native macOS studio for previewing websites and local web projects
 - Xcode Command Line Tools with Swift 6 or newer.
 - Node.js and npm only when previewing npm-based projects or running the npm integration tests.
 
-ViewDeck is currently distributed as source. The build script creates an ad-hoc signed application for local development.
+Download the app, standalone CLI, or agent-tools bundle from [GitHub Releases](https://github.com/LorenzGit/view-deck/releases/latest), or build from source. Release downloads and local builds are ad-hoc signed and are not notarized by Apple.
 
 ## Build and run
 
@@ -54,7 +55,75 @@ swift run --package-path native ViewDeckNative
 
 The build also creates `dist/native/viewdeck`, a standalone command-line executable.
 
+To install the CLI and agent skill for use from any project:
+
+```bash
+python3 scripts/install-global.py
+```
+
+The agent-tools release bundle contains the built app, CLI, skill, and installer.
+Extract it and run the same installer command from the extracted directory.
+
+This installs the CLI and companion app under `~/.local/share/viewdeck`, exposes
+`~/.local/bin/viewdeck`, and puts the complete skill in
+`~/.agents/skills/viewdeck-qa`. Codex and Claude Code compatibility links point
+to that same skill. Include `~/.local/bin` in your PATH. Re-run the installer
+after rebuilding to update the global installation. Matching links are reused;
+differing copies of this skill are backed up before replacement. An optional
+`--host hermes` adds a Hermes skill link; specify `--host codex --host claude
+--host hermes` to install all three links. Other assistants that natively read
+`~/.agents/skills` can use the canonical copy directly.
+
 ## Command-line automation
+
+### Persistent sessions for agents
+
+Use a session for exploratory testing where each action depends on the last
+screenshot. The same hidden WebKit page remains alive across CLI invocations,
+with independent ephemeral cookies and local storage. Sessions are muted and
+frameless by default. They do not activate ViewDeck or move the system pointer.
+
+```bash
+viewdeck session start http://localhost:5173 --device iphone-17-pro-max --wait-for canvas
+# Use the session ID returned by start in each following command.
+viewdeck session screenshot SESSION_ID --output /tmp/before.png
+viewdeck session click SESSION_ID --selector '#play'
+viewdeck session key SESSION_ID --key ArrowRight --hold 0.2
+viewdeck session wait SESSION_ID --js 'window.roundComplete === true'
+viewdeck session screenshot SESSION_ID --output /tmp/after.png
+viewdeck session inspect SESSION_ID
+viewdeck session stop SESSION_ID
+```
+
+`session start` also accepts `--file`, `--project`, and the normal source,
+device, orientation, layer, network, native-HTTP, and readiness options. Use
+`session help` for typing, pointer down/move/up, dragging, scrolling, JavaScript
+evaluation (including returned promises), navigation, reload, and viewport
+configuration. Clicks and key/text input use native WebKit events. Coordinates
+are CSS pixels in the main page; screenshot results include `preview.pageFrame`
+for mapping pages surrounded by browser chrome or HTML layers.
+
+```bash
+viewdeck session record start SESSION_ID --output /tmp/game.mp4
+viewdeck session click SESSION_ID --x 150 --y 300
+viewdeck session record stop SESSION_ID
+```
+
+Session video defaults to device DPR, 30 FPS, and high-quality H.264. Stop waits
+for MP4 finalization. Stop recording before navigating or changing device
+geometry. Stopping a session also releases held inputs, finalizes active video,
+and stops any server it launched. Idle sessions expire after 30 minutes; use
+`--idle-timeout SECONDS` on start to change that limit. `session list` and
+`session status SESSION_ID` report lifecycle and recording state.
+
+Every session command returns JSON, including errors, and failures have a
+nonzero exit status. Programmatic clients can use `session request SESSION_ID
+--input /absolute/request.json` with a body such as
+`{"method":"click","params":{"selector":"#play"}}`. Methods execute serially
+within a session. Commands support `--timeout` between 0.1 and 120 seconds.
+The control channel uses private per-user files and opens no HTTP control port.
+Session state belongs to its helper process; attaching to a page already open
+in the GUI is not supported. Use `app open` for a manual GUI handoff instead.
 
 ### Configure the interactive app
 

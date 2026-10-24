@@ -336,10 +336,14 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
     private(set) var networkShapingSetupError: Error?
     private(set) var nativeHTTPConfiguration: NativeHTTPConfiguration
 
+    var sessionInputView: WKWebView { webView }
+    var sessionPageFrame: CGRect { webView.convert(webView.bounds, to: viewportClip) }
+
     init(
         profile: DeviceProfile,
         networkShapingConfiguration: NetworkShapingConfiguration = .disabled,
-        nativeHTTPConfiguration: NativeHTTPConfiguration = .disabled
+        nativeHTTPConfiguration: NativeHTTPConfiguration = .disabled,
+        dataStore: WKWebsiteDataStore? = nil
     ) {
         self.profile = profile
         self.safeArea = profile.safeArea
@@ -351,7 +355,7 @@ final class DevicePreviewView: FlippedView, WKNavigationDelegate, WKUIDelegate {
         let nativeHTTPBridge = NativeHTTPBridge(configuration: nativeHTTPConfiguration)
         self.qaScriptMessageHandler = qaScriptMessageHandler
         self.nativeHTTPBridge = nativeHTTPBridge
-        let websiteDataStore = WKWebsiteDataStore(
+        let websiteDataStore = dataStore ?? WKWebsiteDataStore(
             forIdentifier: Self.primaryWebsiteDataStoreIdentifier
         )
         if networkShapingConfiguration.enabled {

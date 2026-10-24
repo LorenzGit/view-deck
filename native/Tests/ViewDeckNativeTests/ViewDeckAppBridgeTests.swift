@@ -3,6 +3,21 @@ import XCTest
 @testable import ViewDeckCore
 
 final class ViewDeckAppBridgeTests: XCTestCase {
+    func testBundleLocatorFollowsTheGloballyInstalledCLISymlink() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installation = root.appendingPathComponent("installation")
+        let app = installation.appendingPathComponent("ViewDeck.app")
+        let appExecutable = app.appendingPathComponent("Contents/MacOS/ViewDeckNative")
+        try FileManager.default.createDirectory(at: appExecutable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: appExecutable.path, contents: Data()))
+        let cli = installation.appendingPathComponent("viewdeck")
+        XCTAssertTrue(FileManager.default.createFile(atPath: cli.path, contents: Data()))
+        let link = root.appendingPathComponent("viewdeck")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: cli)
+        XCTAssertEqual(ViewDeckAppBundleLocator.locate(explicitURL: nil, executableURL: link), app.standardizedFileURL)
+    }
+
     func testRequestStoreRoundTripsAndConditionallyRemovesRequests() throws {
         let suiteName = "ViewDeckAppBridgeTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

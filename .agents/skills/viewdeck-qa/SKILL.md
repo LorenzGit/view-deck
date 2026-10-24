@@ -1,6 +1,6 @@
 ---
 name: viewdeck-qa
-description: Run deterministic visual and interaction QA with the ViewDeck CLI. Use when an agent needs to inspect, record, author, replay, accelerate, debug, or collect screenshots, checkpoint images, videos, and reports for PixiJS, Three.js, canvas, Vite, React, or HTML sites and games; or when working with .viewdeck.json scenarios.
+description: Control persistent hidden ViewDeck sessions and run deterministic visual and interaction QA with the ViewDeck CLI. Use for exploratory web/game testing, clicks, typing, screenshots, recording, page inspection, or authoring and replaying .viewdeck.json scenarios for PixiJS, Three.js, canvas, React, Vite, and HTML.
 ---
 
 # ViewDeck QA
@@ -12,18 +12,22 @@ smart replay over timing derived from agent reasoning or screenshot processing.
 ## Resolve ViewDeck and artifacts
 
 1. Prefer a ViewDeck executable path supplied by the user.
-2. Otherwise use `dist/native/viewdeck` from a ViewDeck checkout.
-3. If that executable is absent, build it from the ViewDeck repository:
+2. Otherwise resolve `viewdeck` on PATH (`command -v viewdeck`). The global
+   installation normally exposes `~/.local/bin/viewdeck`.
+3. Otherwise use `dist/native/viewdeck` from a ViewDeck checkout.
+4. If that executable is absent, build it from the ViewDeck repository:
 
 ```bash
 zsh scripts/build-native-app.sh
 ```
 
-Run these preflight commands and use only supported device IDs and capabilities:
+Examples below use `viewdeck`. If you resolved a different executable path,
+substitute that path in every command. Run these preflight commands and use
+only supported device IDs and capabilities:
 
 ```bash
-dist/native/viewdeck capabilities --json
-dist/native/viewdeck devices list --json
+viewdeck capabilities --json
+viewdeck devices list --json
 ```
 
 When the task requests slow, constrained, or offline networking, require a
@@ -42,6 +46,10 @@ mktemp -d /tmp/viewdeck-qa.XXXXXX
 
 ## Choose the workflow
 
+- Use `session start` for exploratory testing where the next action depends on
+  the current screen. Read [persistent sessions](references/persistent-sessions.md)
+  for the observe/action loop, native input, recording, and cleanup. Keep one
+  session ID across commands; separate capture runs do not share that page state.
 - Use `capture` or `inspect` for a one-state smoke test or layout audit.
 - Use `qa template` when an agent will author a new scripted interaction.
 - Use `app open` when the user wants ViewDeck configured for continued manual
@@ -52,7 +60,12 @@ mktemp -d /tmp/viewdeck-qa.XXXXXX
 - Use `qa replay` when a `.viewdeck.json` scenario already exists.
 
 Recording and replay automatically clear data for the tested site before the
-run. Do not add a second cache-reset mechanism.
+run. Persistent sessions instead keep their own isolated storage until stopped.
+Do not reset or replay a session merely to take another screenshot.
+
+Use CLI sessions for normal exploratory page/game interaction. Computer use is
+appropriate when the task explicitly tests ViewDeck's native UI or the user
+asks to drive that UI; it is not needed for page clicks, keyboard input, or video.
 
 ## Keep agent runs invisible
 
@@ -120,7 +133,7 @@ Portrait is the CLI default. When the requested experience is landscape, pass
 command and when generating a `qa template`:
 
 ```bash
-dist/native/viewdeck capture \
+viewdeck capture \
   --project /absolute/path/to/game \
   --npm-script dev \
   --device iphone-17-pro-max \
@@ -213,7 +226,7 @@ static HTML, or a URL as the positional source. Tie initial readiness to a
 selector or JavaScript state whenever possible.
 
 ```bash
-dist/native/viewdeck capture \
+viewdeck capture \
   --project /absolute/path/to/game \
   --npm-script dev \
   --device iphone-17-pro-max \
@@ -239,7 +252,7 @@ For `capture`, `inspect`, and `record`, use `--wait-for` for a durable CSS
 selector and/or `--wait-js` for persistent application-owned state:
 
 ```bash
-dist/native/viewdeck capture \
+viewdeck capture \
   --project /absolute/path/to/game \
   --npm-script dev \
   --wait-for '[data-viewdeck-ready="true"]' \
@@ -275,7 +288,7 @@ user supplied the exact profile values. Any network option enables the
 per-preview network transport:
 
 ```bash
-dist/native/viewdeck inspect https://example.com \
+viewdeck inspect https://example.com \
   --network-rtt-ms 400 \
   --network-jitter-ms 40 \
   --network-down-kbps 1500 \
@@ -341,7 +354,7 @@ one repeatable `--native-http-allow-host <hostname>` for every exact destination
 host to direct `capture`, `inspect`, and `record` commands:
 
 ```bash
-dist/native/viewdeck inspect http://localhost:5173 \
+viewdeck inspect http://localhost:5173 \
   --native-http \
   --native-http-allow-host api.example.com \
   --audio verify-silent \
@@ -358,7 +371,7 @@ When handing native HTTP testing back to the user, configure and open the real
 app directly:
 
 ```bash
-dist/native/viewdeck app open http://localhost:5173 \
+viewdeck app open http://localhost:5173 \
   --device iphone-17-pro-max \
   --native-http \
   --native-http-allow-host api.example.com \
@@ -412,7 +425,7 @@ configuration by hand. Choose the requested orientation explicitly; the
 following example creates a landscape scenario.
 
 ```bash
-dist/native/viewdeck qa template \
+viewdeck qa template \
   --project /absolute/path/to/game \
   --npm-script dev \
   --device iphone-17-pro-max \
@@ -488,7 +501,7 @@ replay with `--artifacts`. Use this minimal shape:
 Use smart timing by default for agent-authored or agent-observed scenarios:
 
 ```bash
-dist/native/viewdeck qa replay \
+viewdeck qa replay \
   /tmp/viewdeck-qa.example/gameplay.viewdeck.json \
   --speed smart \
   --audio verify-silent \
